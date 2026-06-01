@@ -24,7 +24,19 @@ _ROLE = (
     "A 172-line function may be appropriate for the complexity it handles. "
     "These measurements exist for your awareness — integrate them into your "
     "own judgment. You have the full context. You decide what to act on and "
-    "what to leave as-is."
+    "what to leave as-is.\n\n"
+    "After reviewing PRISM's output, read the measured file(s) directly "
+    "if they are not already in your context. For projects you haven't "
+    "explored before, use ls to understand the project structure first. "
+    "PRISM has three speed tiers selectable via the mode parameter:\n"
+    "- structure-only (~0.5s): every iteration — tree-sitter metrics only\n"
+    "- default (~10s): every few iterations — adds curated Semgrep rules\n"
+    "- community (~50s): final audit — adds Semgrep community rules\n"
+    "Choose the appropriate tier for your current task, call PRISM, "
+    "consider the measurements alongside the code itself, then review "
+    "the files adversarially for any issues PRISM cannot detect — "
+    "logical errors, validation gaps, naming problems, or security "
+    "concerns in context."
 )
 
 _SCOPE = {
