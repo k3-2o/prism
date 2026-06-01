@@ -1,106 +1,73 @@
 # PRISM
 
-Structural code analysis for AI agent loops. One CLI, 16 tree-sitter measurements,
-Semgrep rules (curated + custom). Runs on Python 3.12+ with `uv`.
+Structural code analysis for AI agent loops. 16 tree-sitter measurements across
+12 languages, Semgrep rule integration, and a pi agent harness extension.
 
+```bash
+uv run prism path/to/file.py          # default (~10s)
+uv run prism --structure-only path/   # fast iteration (~0.5s)
+uv run prism --community path/        # full audit (~50s)
 ```
-uv run prism path/to/file.py          → JSON: params, nesting, dead code, clones, cyclics...
-uv run prism --structure-only path/   → tree-sitter only (~0.5s)
-uv run prism --community path/        → + Semgrep community rules (~50s)
-```
+
+[!["mode": "structure-only"](https://img.shields.io/badge/python-3.12-blue)]()
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
+[![Built with uv](https://img.shields.io/badge/built%20with-uv-purple)](https://github.com/astral-sh/uv)
 
 ---
 
-## Portable Setup (New Machine)
+## What It Does
+
+PRISM is a CLI tool that produces structured JSON about your code. It combines
+two engines:
+
+- **Tree-sitter** (sub-millisecond) — 16 quantitative measurements: parameter
+  counts, nesting depth, cyclomatic complexity, cognitive complexity, code clones,
+  dead functions, cyclic imports, module coupling, error handling coverage,
+  function purity, public/private ratio, import depth, structural diffs.
+- **Semgrep** (pattern matching) — curated rules for dev tooling and correctness
+  gaps that Semgrep's community library doesn't cover. Community rules available
+  via opt-in.
+
+The output is designed for AI agent loops — structured JSON with a `role` field
+that frames PRISM as a fact-checker, not a judge. Measurements are accurate but
+not exhaustive. You decide what to act on.
+
+## Setup
+
+**Prerequisites:** Python 3.12+, [`uv`](https://github.com/astral-sh/uv), and
+[`semgrep`](https://github.com/semgrep/semgrep) (for rule-based scanning).
 
 ```bash
-# Clone
 git clone <repo-url> prism
 cd prism
-
-# Install dependencies (Python 3.12+ required)
 uv sync
-
-# Run on any file
 uv run prism path/to/file.py
 ```
 
-**Pi extension** — copy `prism.ts` to `~/.pi/agent/extensions/`.
-Edit the `PRISM_DIR` constant at the top of the file to point to your
-local clone path. Then `/reload` in pi. The model discovers the `prism`
-tool automatically.
+### Pi Agent Extension
 
-**Environment variable** — alternatively, set `PRISM_DIR` to the repo path:
+The [`prism.ts`](./prism.ts) file registers `prism` as a tool callable by the
+LLM in the [pi coding agent](https://pi.dev). Copy it to your extensions
+directory and set the `PRISM_DIR` environment variable:
+
 ```bash
-export PRISM_DIR=/home/you/prism
+cp prism.ts ~/.pi/agent/extensions/
+export PRISM_DIR=/path/to/prism
+# Then /reload in pi
 ```
-The extension checks this before falling back to the hardcoded default.
 
----
+The model discovers the `prism` tool automatically and can call it with one of
+three modes: `structure-only`, `default`, or `community`.
 
-## Custom Semgrep Rules
+## Three Speed Tiers
 
-PRISM ships with 5 example Python rules covering dev tooling and correctness gaps
-that Semgrep's community library misses. These are **templates** — you can (and should)
-generate rules for your own project's domain.
-
-### How It Works
-
-PRISM loads every `.yaml` file from `src/prism/rules/` automatically. Drop a file in,
-it runs on the next scan. No code changes needed.
-
-### The Prompt
-
-To generate custom rules for your project, tell your agent:
-
-> Research common security vulnerabilities and code quality patterns specific
-> to [YOUR DOMAIN: e.g., CLI tools in Rust, game engines in C++, data pipelines in Python].
-> Use the Semgrep registry, CVE databases, OWASP cheat sheets, and your knowledge
-> of the domain. Compile a focused list of the top 10-15 patterns that matter.
->
-> Then write Semgrep YAML rules for each pattern, following this exact format:
->
-> ```yaml
-> rules:
->   - id: prism.custom.unique-rule-name
->     pattern: |
->       <code pattern to match>
->     message: >
->       Plain explanation of why this pattern is a problem and what to use instead.
->       Keep it actionable — the model reading this needs to understand the fix.
->     languages: [python]
->     severity: WARNING  # ERROR | WARNING | INFO
-> ```
->
-> Save each rule to `src/prism/rules/` with a descriptive filename.
-> PRISM picks them up on the next scan.
-
-### Example Rules (Shipped)
-
-| File | What It Detects |
-|---|---|
-| `print-vs-logging.yaml` | `print()` used in library code instead of logging |
-| `unchecked-exit-codes.yaml` | `sys.exit(0)` in what looks like an error branch |
-| `signal-handler-registration.yaml` | `signal.signal()` registered without handler cleanup review |
-| `comparison-pitfalls.yaml` | `is True/False/None` instead of `==` or truthiness |
-| `unused-return.yaml` | `shutil.rmtree()` called without error handling |
-
-Use these as templates. The pattern: identify a recurring structural issue in your
-domain, write a pattern, explain the fix in the message.
-
----
-
-## The Three Speed Tiers
-
-| Mode | Flag | Latency | When |
+| Mode | Flag | Latency | Use Case |
 |---|---|---|---|
-| Structure-only | `--structure-only` | ~0.5s | Every agent iteration — tree-sitter only |
-| Default | *(none)* | ~10s | Every few iterations — adds curated Semgrep rules |
-| Community | `--community` | ~50s | Before commit, final audit — adds Semgrep community rules |
+| Structure-only | `--structure-only` | ~0.5s | Every agent iteration |
+| Default | *(none)* | ~10s | Every few iterations |
+| Community | `--community` | ~50s | Final audit before commit |
 
----
-
-## All 16 Tree-Sitter Measurements
+## All 16 Measurements
 
 ```
 size:          function_length, parameter_count, import_depth
@@ -111,20 +78,31 @@ design:        code_clone, public_ratio
 diff:          diff_function_added/removed/changed
 ```
 
-Every measurement is language-agnostic. 12 languages supported
-(Python, JavaScript, TypeScript, Go, Rust, Java, Ruby, PHP, C, C++, HCL, Zig).
+### Supported Languages
 
----
+Python, JavaScript, TypeScript, Go, Rust, Java, Ruby, PHP, C, C++, HCL, Zig.
 
-## Quick Start
+## Custom Semgrep Rules
 
-```bash
-cd ~/prism
-uv sync
+PRISM ships with 5 example Python rules for dev tooling and correctness.
+You can — and should — generate rules for your own domain by telling your agent:
 
-# Single file
-uv run prism src/auth.py
+> Research common patterns specific to [your domain], then write Semgrep YAML
+> rules following the examples in `src/prism/rules/`. Save them there — PRISM
+> loads them automatically on the next scan.
 
-# Project mode
-uv run prism src/
+## Project Structure
+
 ```
+prism.ts              — pi agent extension
+src/prism/
+  main.py             — CLI entry point
+  engine/             — tree-sitter + Semgrep runners
+  enrich/             — cross-file caller enrichment
+  rules/              — curated Semgrep rules (YAML)
+docs/                 — spec documentation
+```
+
+## License
+
+MIT — see [LICENSE](./LICENSE).
