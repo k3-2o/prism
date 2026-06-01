@@ -1,0 +1,9 @@
+rules:
+  - id: prism.dev-tooling.unchecked-exit-code
+    pattern: |
+      sys.exit(0)
+    message: >
+      Function exits with code 0 in what appears to be an error branch.
+      Ensure non-zero exit codes are used for failure conditions.
+    languages: [python]
+    severity: WARNING

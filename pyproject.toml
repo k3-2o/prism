@@ -1,0 +1,46 @@
+[project]
+name = "prism"
+version = "0.1.0"
+description = "Structural code analysis for AI agent loops"
+readme = "README.md"
+authors = [
+    { name = "K2" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "click>=8.1",
+    "semgrep>=1.121.0",
+    "setuptools<70",
+    "tree-sitter-javascript>=0.25.0",
+    "tree-sitter>=0.24",
+    "tree-sitter-python>=0.23",
+    "tree-sitter-typescript>=0.23.2",
+    "tree-sitter-go>=0.25.0",
+    "tree-sitter-rust>=0.24.2",
+    "tree-sitter-java>=0.23.5",
+    "tree-sitter-ruby>=0.23.1",
+    "tree-sitter-php>=0.24.1",
+    "tree-sitter-c>=0.24.2",
+    "tree-sitter-cpp>=0.23.4",
+    "tree-sitter-hcl>=1.2.0",
+    "tree-sitter-zig>=1.1.2",
+]
+
+[project.scripts]
+prism = "prism.main:cli"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.15",
+]

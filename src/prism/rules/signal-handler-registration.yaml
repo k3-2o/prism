@@ -1,0 +1,9 @@
+rules:
+  - id: prism.dev-tooling.signal-without-handler
+    pattern: |
+      signal.signal($SIG, $HANDLER)
+    message: >
+      Signal handler registered. Ensure the handler properly drains the signal
+      channel, performs cleanup, and doesn't block indefinitely.
+    languages: [python]
+    severity: INFO
