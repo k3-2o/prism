@@ -25,3 +25,7 @@ Thumbs.db
 
 # Test artifacts
 /tmp/
+
+# Bytecode cache
+__pycache__/
+*.pyc
