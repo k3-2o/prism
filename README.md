@@ -1,7 +1,7 @@
 # PRISM
 
 Structural code analysis for AI agent loops. 16 tree-sitter measurements across
-12 languages, Semgrep rule integration, and a pi agent harness extension.
+12 languages, curated Semgrep rules, and a pi agent skill for context-aware use.
 
 ```bash
 uv run prism path/to/file.py          # default (~10s)
@@ -28,9 +28,8 @@ two engines:
   gaps that Semgrep's community library doesn't cover. Community rules available
   via opt-in.
 
-The output is designed for AI agent loops — structured JSON with a `role` field
-that frames PRISM as a fact-checker, not a judge. Measurements are accurate but
-not exhaustive. You decide what to act on.
+Output is clean JSON — no prose, no preamble. The agent skill (see below)
+provides the framing and workflow guidance.
 
 ## Setup
 
@@ -44,20 +43,24 @@ uv sync
 uv run prism path/to/file.py
 ```
 
-### Pi Agent Extension
+### Pi Agent Skill
 
-The [`prism.ts`](./prism.ts) file registers `prism` as a tool callable by the
-LLM in the [pi coding agent](https://pi.dev). Copy it to your extensions
-directory and set the `PRISM_DIR` environment variable:
+A [SKILL.md](./docs/PRISM-SKILL.md) is included for use with pi and other
+agent harnesses that support the Agent Skills standard. It teaches the model
+PRISM's philosophy, three speed tiers, 16 metrics, and the correct workflow
+(call → acknowledge → read → review adversarially → decide).
+
+**To install:**
 
 ```bash
-cp prism.ts ~/.pi/agent/extensions/
-export PRISM_DIR=/path/to/prism
-# Then /reload in pi
+mkdir -p ~/.pi/agent/skills/prism
+cp docs/PRISM-SKILL.md ~/.pi/agent/skills/prism/SKILL.md
 ```
 
-The model discovers the `prism` tool automatically and can call it with one of
-three modes: `structure-only`, `default`, or `community`.
+Then `/reload` in pi. The skill is triggered by words like `prism`, `analyze`,
+`audit`, `review`, `complexity`, or `dead code`.
+
+The model uses native `bash` to call PRISM — no custom extension needed.
 
 ## Three Speed Tiers
 
@@ -94,13 +97,15 @@ You can — and should — generate rules for your own domain by telling your ag
 ## Project Structure
 
 ```
-prism.ts              — pi agent extension
 src/prism/
   main.py             — CLI entry point
   engine/             — tree-sitter + Semgrep runners
   enrich/             — cross-file caller enrichment
   rules/              — curated Semgrep rules (YAML)
-docs/                 — spec documentation
+docs/
+  PRISM.md            — full spec documentation
+  PRISM-SKILL.md      — agent skill for pi
+  PRISM-HCL-EXTENSION.md
 ```
 
 ## License

@@ -227,10 +227,12 @@ The agent decides which mode to call based on context. The pi extension exposes 
       unused-return.yaml              # shutil.rmtree() unchecked
 ```
 
-### Pi Extension (`~/.pi/agent/extensions/prism.ts`)
+### Agent Skill (`~/.pi/agent/skills/prism/`)
 
 ```
-~/.pi/agent/extensions/prism.ts       # Auto-discovered by pi, registers `prism` tool
+~/.pi/agent/skills/prism/
+  SKILL.md          # Skill definition: trigger, workflow, philosophy
+  _meta.json        # Skill identity (skill-creator convention)
 ```
 
 ---
@@ -294,11 +296,6 @@ cd ~/project && uv run prism .
 ```json
 {
   "version": "0.1.0",
-  "role": "PRISM is a structural fact-checker. It counts parameters, nesting depth, dead functions, cyclic imports, code clones, and similar quantitative properties. It does not understand the code's purpose, domain constraints, or whether a high count is actually a problem in context. A function with 9 parameters may be the correct design for its domain. A 172-line function may be appropriate for the complexity it handles. These measurements exist for your awareness — integrate them into your own judgment. You have the full context. You decide what to act on and what to leave as-is.\n\nAfter reviewing PRISM's output, read the measured file(s) directly if they are not already in your context. For projects you haven't explored before, use ls to understand the project structure first. PRISM has three speed tiers selectable via the mode parameter:\n- structure-only (~0.5s): every iteration — tree-sitter metrics only\n- default (~10s): every few iterations — adds curated Semgrep rules\n- community (~50s): final audit — adds Semgrep community rules\nChoose the appropriate tier for your current task, call PRISM, consider the measurements alongside the code itself, then review the files adversarially for any issues PRISM cannot detect — logical errors, validation gaps, naming problems, or security concerns in context.",
-  "scope": {
-    "covers": ["size", "complexity", "coupling", "dead_code", "code_clones", "function_purity"],
-    "does_not_cover": ["logical_correctness", "validation_adequacy", "naming_conventions", "security_best_practices", "error_handling_logical_adequacy", "test_coverage", "performance"]
-  },
   "file": "src/auth.py",
   "language": "python",
   "mode": "default",
@@ -370,40 +367,37 @@ Thresholds vary per language. See the language registry in `src/prism/engine/lan
 2. **Every field is verifiable** — the model can check: does this function actually have 16 parameters? Yes, tree-sitter counted them exactly
 3. **No instructions** — PRISM never says "fix like this" or "check for X". It reports. The model decides
 4. **Cross-file callers are the primary enrichment** — this is the hardest thing for the model to compute from context alone (may not have loaded the caller's file)
-5. **The `role` field sets the frame** — PRISM is a counter, not a judge. The `role` field explicitly tells the model that a high count may be correct in context, and that the model's own judgment takes priority over any measurement.
-6. **The `scope` field draws the boundary** — `scope.covers` lists what PRISM checked. `scope.does_not_cover` lists what the model must handle itself. The model should not create false positives in these areas just to "be thorough" — if there's no concrete evidence of a problem, the measurement is that PRISM doesn't measure it, not that there's a problem.
-7. **A measurement is not a mandate** — exceeding a threshold does not mean a fix is required. It means: "here is a structural fact. The model decides whether it matters in this context."
+5. **The SKILL.md sets the frame** — `docs/PRISM-SKILL.md` teaches the model PRISM's philosophy before any command runs. PRISM is a counter, not a judge. Measurements are not mandates.
+6. **A measurement is not a mandate** — exceeding a threshold does not mean a fix is required. It means: "here is a structural fact. The model decides whether it matters in this context."
 
 ---
 
-## 7. Pi Extension
+## 7. PRISM Skill (Agent Skills Standard)
 
-**Location:** `~/.pi/agent/extensions/prism.ts` (auto-discovered by pi on `/reload` or restart)
+PRISM ships as an agent skill at `docs/PRISM-SKILL.md`. It follows the
+[Agent Skills standard](https://agentskills.io/specification) and is compatible
+with pi, Claude Code, and other harnesses that support `.md`-based skills.
 
-**What it does:** Registers a custom tool called `prism` that the LLM can call during agent sessions.
+The skill replaces the previous TypeScript extension. Instead of a custom tool
+call, the model reads the SKILL.md (loaded on-demand by the harness), learns
+PRISM's philosophy and workflow, and calls the CLI directly via `bash`.
 
-**Tool definition:**
+**Install:**
 
-```typescript
-{
-  name: "prism",
-  label: "PRISM",
-  description: "Analyze code and return structured measurements...",
-  parameters: {
-    path: string,     // File or directory to analyze
-    mode: enum        // "structure-only" | "default" | "community"
-  }
-}
+```bash
+mkdir -p ~/.pi/agent/skills/prism
+cp docs/PRISM-SKILL.md ~/.pi/agent/skills/prism/SKILL.md
+cp docs/_meta.json ~/.pi/agent/skills/prism/_meta.json
+# /reload in pi
 ```
 
-**Execution:** Async via Node.js `child_process.exec` (does NOT block the terminal UI). The AbortSignal is wired to kill the subprocess. stderr (Semgrep progress) is captured for error reporting.
+**Trigger words:** `prism`, `analyze`, `audit`, `review`, `complexity`, `dead code`
 
-**Prompt guidelines included:**
-- Three speed tiers explained
-- Note that measurements are NOT exhaustive
-- Use as hints, not a complete diagnostic
-
-**Reload:** After modifying the extension, run `/reload` in pi or restart pi.
+The skill teaches the model:
+- PRISM's philosophy (counter, not judge)
+- Three speed tiers and when to use each
+- The 5-step workflow: call → acknowledge → read → review adversarially → decide
+- What PRISM does NOT measure (logical correctness, validation, naming, security, etc.)
 
 ---
 
@@ -759,9 +753,9 @@ Currently: git clone + `uv sync`. Options for distribution:
 - Standalone binary via PyInstaller or similar (avoids Python dependency for users)
 - No distribution (personal tool, not shared)
 
-### Q6: What's the pi extension's long-term home?
+### Q6: What's the skill's long-term home?
 
-Currently at `~/.pi/agent/extensions/prism.ts`. If PRISM becomes a PyPI package, the extension could be published as a pi package. If PRISM stays a personal tool, the current single-file extension is fine.
+Currently at `~/.pi/agent/skills/prism/SKILL.md` and mirrored in the repo at `docs/PRISM-SKILL.md`. If PRISM becomes a PyPI package, the skill could ship as part of the package. For now, the skill is copied manually and included in the repo for portability.
 
 ---
 
@@ -817,7 +811,7 @@ Currently at `~/.pi/agent/extensions/prism.ts`. If PRISM becomes a PyPI package,
 | 4 | Validation gate (3 test cases, control vs treatment) | ~2 hr |
 | 5 | Semgrep integration + 5 curated rules | ~3 hr |
 | 6 | Curated rules expanded (5 rules shipped) | ~1 hr |
-| 7 | Pi extension (`~/.pi/agent/extensions/prism.ts`) | ~1 hr |
+| 7 | Pi agent skill (`docs/PRISM-SKILL.md`) | ~1 hr |
 
 **Validation finding:** PRISM helps when the model can't trivially compute the measurement (large files, cross-file callers, buried metrics). PRISM can hurt on small files by anchoring the model's focus. Mitigated by `measurements` naming + `note` field.
 
