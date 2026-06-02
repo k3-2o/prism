@@ -15,50 +15,6 @@ from prism.engine.treerunner import run as treerunner_run
 from prism.engine.treerunner import run_project as treerunner_run_project
 from prism.enrich.enricher import discover_project_files, enrich_by_line, enrich_measurements
 
-_ROLE = (
-    "PRISM is a structural fact-checker. It counts parameters, nesting depth, "
-    "dead functions, cyclic imports, code clones, and similar quantitative "
-    "properties. It does not understand the code's purpose, domain constraints, "
-    "or whether a high count is actually a problem in context. "
-    "A function with 9 parameters may be the correct design for its domain. "
-    "A 172-line function may be appropriate for the complexity it handles. "
-    "These measurements exist for your awareness — integrate them into your "
-    "own judgment. You have the full context. You decide what to act on and "
-    "what to leave as-is.\n\n"
-    "After reviewing PRISM's output, read the measured file(s) directly "
-    "if they are not already in your context. For projects you haven't "
-    "explored before, use ls to understand the project structure first. "
-    "PRISM has three speed tiers selectable via the mode parameter:\n"
-    "- structure-only (~0.5s): every iteration — tree-sitter metrics only\n"
-    "- default (~10s): every few iterations — adds curated Semgrep rules\n"
-    "- community (~50s): final audit — adds Semgrep community rules\n"
-    "Choose the appropriate tier for your current task, call PRISM, "
-    "consider the measurements alongside the code itself, then review "
-    "the files adversarially for any issues PRISM cannot detect — "
-    "logical errors, validation gaps, naming problems, or security "
-    "concerns in context."
-)
-
-_SCOPE = {
-    "covers": [
-        "size",
-        "complexity",
-        "coupling",
-        "dead_code",
-        "code_clones",
-        "function_purity",
-    ],
-    "does_not_cover": [
-        "logical_correctness",
-        "validation_adequacy",
-        "naming_conventions",
-        "security_best_practices",
-        "error_handling_logical_adequacy",
-        "test_coverage",
-        "performance",
-    ],
-}
-
 # Path to PRISM-curated Semgrep rules, shipped with the package
 _PRISM_RULES_DIR = str(Path(__file__).resolve().parent / "rules")
 
@@ -81,8 +37,6 @@ def _build_output(path: str, structure_only: bool, include_community: bool) -> d
 
     return {
         "version": __version__,
-        "role": _ROLE,
-        "scope": _SCOPE,
         "file": path,
         "language": _detect_language(path),
         "mode": "structure-only" if structure_only else "full",
@@ -126,8 +80,6 @@ def _build_project_output(root: str, structure_only: bool, include_community: bo
     if not files:
         return {
             "version": __version__,
-            "role": _ROLE,
-            "scope": _SCOPE,
             "file": root,
             "language": project_lang,
             "mode": "structure-only" if structure_only else "full",
@@ -156,8 +108,6 @@ def _build_project_output(root: str, structure_only: bool, include_community: bo
 
     return {
         "version": __version__,
-        "role": _ROLE,
-        "scope": _SCOPE,
         "file": root,
         "language": project_lang,
         "mode": "structure-only" if structure_only else "full",
