@@ -31,8 +31,14 @@ _LANG_CACHE: dict[int, str] = {}
 def parse_file(path: str | Path) -> tuple[Tree, bytes, str]:
     """Parse a file, returning (tree, data_bytes, language_name)."""
     parser, lang = _get_parser_for_file(str(path))
-    data = Path(path).read_bytes()
-    tree = parser.parse(data)
+    try:
+        data = Path(path).read_bytes()
+    except OSError as e:
+        raise ValueError(f"Cannot read file: {path} — {e}") from e
+    try:
+        tree = parser.parse(data)
+    except Exception as e:
+        raise ValueError(f"Cannot parse file: {path} — {e}") from e
     _CODE_CACHE[id(tree)] = data
     _LANG_CACHE[id(tree)] = lang
     return tree, data, lang
@@ -112,8 +118,7 @@ def _make_measurement(
     function: str,
     value: int | None,
     threshold: int | None,
-    line: int,
-    file_path: str,
+    location: dict,
     **extra: Any,
 ) -> dict[str, Any]:
     return {
@@ -122,7 +127,7 @@ def _make_measurement(
         "function": function,
         "value": value,
         "threshold": threshold,
-        "location": {"file": file_path, "line": line},
+        "location": location,
         "context": {"callers": [], **extra},
     }
 
@@ -164,8 +169,7 @@ def measure_parameter_count(
                     func_name,
                     param_count,
                     max_params,
-                    line,
-                    file_path,
+                    {"file": file_path, "line": line},
                     signature=_text(data, func_node).split("\n")[0].strip(),
                 )
             )
@@ -216,8 +220,7 @@ def measure_nesting_depth(
                     func_name,
                     max_depth,
                     thresholds["nesting_depth"],
-                    line,
-                    file_path,
+                    {"file": file_path, "line": line},
                 )
             )
 
@@ -250,7 +253,7 @@ def measure_function_length(
 
         if length > max_lines:
             findings.append(
-                _make_measurement("function_length", func_name, length, max_lines, line, file_path)
+                _make_measurement("function_length", func_name, length, max_lines, {"file": file_path, "line": line})
             )
 
     return findings
@@ -285,7 +288,7 @@ def measure_dead_code(tree: Tree, data: bytes, file_path: str, lang: str) -> lis
         if name.startswith("__") and name.endswith("__"):
             continue  # Python dunders
         if name not in called:
-            findings.append(_make_measurement("dead_function", name, 0, None, line, file_path))
+            findings.append(_make_measurement("dead_function", name, 0, None, {"file": file_path, "line": line}))
 
     return findings
 
@@ -341,7 +344,7 @@ def measure_cyclic_imports(files: list[str], base_dir: str) -> list[dict[str, An
                 continue
             findings.append(
                 _make_measurement(
-                    "cyclic_import", node, len(cycle), 1, 1, file_paths[node], cycle=cycle
+                    "cyclic_import", node, len(cycle), 1, {"file": file_paths[node], "line": 1}, cycle=cycle
                 )
             )
     return findings
@@ -419,7 +422,7 @@ def measure_cyclomatic_complexity(
         if complexity > max_complexity:
             findings.append(
                 _make_measurement(
-                    "cyclomatic_complexity", func_name, complexity, max_complexity, line, file_path
+                    "cyclomatic_complexity", func_name, complexity, max_complexity, {"file": file_path, "line": line}
                 )
             )
 
@@ -471,7 +474,7 @@ def measure_cognitive_complexity(
 
         if score > 15:
             findings.append(
-                _make_measurement("cognitive_complexity", func_name, score, 15, line, file_path)
+                _make_measurement("cognitive_complexity", func_name, score, 15, {"file": file_path, "line": line})
             )
 
     return findings
@@ -550,8 +553,7 @@ def measure_module_coupling(files: list[str]) -> list[dict[str, Any]]:
                     module,
                     round(instability, 2),
                     0.8,
-                    1,
-                    path,
+                    {"file": path, "line": 1},
                     detail=f"Ce={outgoing}, Ca={incoming}, too many outgoing dependencies",
                 )
             )
@@ -562,8 +564,7 @@ def measure_module_coupling(files: list[str]) -> list[dict[str, Any]]:
                     module,
                     round(instability, 2),
                     0.8,
-                    1,
-                    path,
+                    {"file": path, "line": 1},
                     detail=f"Ce={outgoing}, Ca={incoming}, no outgoing deps — possibly dead abstraction",
                 )
             )
@@ -574,131 +575,88 @@ def measure_module_coupling(files: list[str]) -> list[dict[str, Any]]:
 # ── Structural diff (git-aware) ──────────────────────────────────────────
 
 
-def structural_diff(file_path: str) -> list[dict[str, Any]]:
-    """Compare current file metrics with the git HEAD version.
+# ── Structural diff helpers ──────────────────────────────────────────────
 
-    Reports:
-    - Functions added or removed
-    - Changed parameter counts or complexity
-    - New dead code
-    - Changed function length
-    """
+
+def _fetch_git_head(file_path: str) -> bytes | None:
+    """Get the git HEAD version of a file, or None if unavailable."""
     import subprocess
-    import json as _json
 
-    # Get the git HEAD version of the file
     try:
         rel_path = Path(file_path).resolve()
-        # Try relative to git root
         git_root = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            cwd=rel_path.parent,
+            capture_output=True, text=True, timeout=5, cwd=rel_path.parent,
         ).stdout.strip()
-
+        if not git_root:
+            return None
         rel = rel_path.relative_to(Path(git_root))
         head_result = subprocess.run(
             ["git", "show", f"HEAD:{rel}"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            cwd=rel_path.parent,
+            capture_output=True, text=True, timeout=5, cwd=rel_path.parent,
         )
         if head_result.returncode != 0:
-            return []  # File doesn't exist in HEAD (new file)
-        head_code = head_result.stdout.encode("utf-8")
+            return None
+        return head_result.stdout.encode("utf-8")
     except (subprocess.TimeoutExpired, ValueError, FileNotFoundError):
-        return []  # Not a git repo or other error
+        return None
 
-    # Parse current version
-    try:
-        current_tree, current_data, lang = parse_file(file_path)
-    except (ValueError, Exception):
-        return []
 
-    # Parse HEAD version
-    try:
-        parser = _get_parser_for_file(file_path)[0]
-        head_tree = parser.parse(head_code)
-    except Exception:
-        return []
-
-    # Compare function definitions
+def _parse_func_defs(
+    tree: Tree, data: bytes, lang: str
+) -> dict[str, tuple[int, int, int]]:
+    """Extract function names -> (line, param_count, estimated_cc)."""
     queries = get_queries(lang)
+    funcs: dict[str, tuple[int, int, int]] = {}
+
+    for _pat_idx, captures in _get_matches(queries["functions"], tree.root_node):
+        func_name = ""
+        func_node = None
+        params_node = None
+        for name, nodes in captures.items():
+            if name == "name" and nodes:
+                func_name = _text(data, nodes[0])
+            elif name == "func" and nodes:
+                func_node = nodes[0]
+            elif name == "params" and nodes:
+                params_node = nodes[0]
+        if func_name and func_node:
+            pc = _count_parameters(params_node, data, lang) if params_node else 0
+            cc = _estimate_cc(func_node)
+            funcs[func_name] = (func_node.start_point[0] + 1, pc, cc)
+
+    return funcs
+
+
+def _compute_diff_changes(
+    current: dict[str, tuple[int, int, int]],
+    head: dict[str, tuple[int, int, int]],
+    file_path: str,
+) -> list[dict[str, Any]]:
+    """Compare two function sets and produce diff measurements."""
     findings: list[dict[str, Any]] = []
 
-    # Get current functions
-    current_funcs: dict[str, tuple[int, int, int]] = {}  # name -> (line, param_count, cc)
-    for _pat_idx, captures in _get_matches(queries["functions"], current_tree.root_node):
-        func_name = ""
-        func_node = None
-        params_node = None
-        for name, nodes in captures.items():
-            if name == "name" and nodes:
-                func_name = _text(current_data, nodes[0])
-            elif name == "func" and nodes:
-                func_node = nodes[0]
-            elif name == "params" and nodes:
-                params_node = nodes[0]
-        if func_name and func_node:
-            pc = _count_parameters(params_node, current_data, lang) if params_node else 0
-            cc = _estimate_cc(func_node)
-            current_funcs[func_name] = (func_node.start_point[0] + 1, pc, cc)
-
-    # Get HEAD functions
-    head_funcs: dict[str, tuple[int, int, int]] = {}
-    for _pat_idx, captures in _get_matches(queries["functions"], head_tree.root_node):
-        func_name = ""
-        func_node = None
-        params_node = None
-        for name, nodes in captures.items():
-            if name == "name" and nodes:
-                func_name = _text(head_code, nodes[0])
-            elif name == "func" and nodes:
-                func_node = nodes[0]
-            elif name == "params" and nodes:
-                params_node = nodes[0]
-        if func_name and func_node:
-            pc = _count_parameters(params_node, head_code, lang) if params_node else 0
-            cc = _estimate_cc(func_node)
-            head_funcs[func_name] = (func_node.start_point[0] + 1, pc, cc)
-
-    # Added functions
-    for name, (line, pc, cc) in current_funcs.items():
-        if name not in head_funcs:
+    for name, (line, pc, cc) in current.items():
+        if name not in head:
             findings.append(
                 _make_measurement(
-                    "diff_function_added",
-                    name,
-                    0,
-                    None,
-                    line,
-                    file_path,
+                    "diff_function_added", name, 0, None, {"file": file_path, "line": line},
                     detail=f"params={pc}, complexity={cc}",
                 )
             )
 
-    # Removed functions
-    for name, (line, pc, cc) in head_funcs.items():
-        if name not in current_funcs:
+    for name, (line, pc, cc) in head.items():
+        if name not in current:
             findings.append(
                 _make_measurement(
-                    "diff_function_removed",
-                    name,
-                    0,
-                    None,
-                    line,
-                    file_path,
+                    "diff_function_removed", name, 0, None, {"file": file_path, "line": line},
                     detail=f"params={pc}, complexity={cc}",
                 )
             )
 
-    # Changed signatures
-    for name in set(current_funcs) & set(head_funcs):
-        cur_line, cur_pc, cur_cc = current_funcs[name]
-        head_line, head_pc, head_cc = head_funcs[name]
+    for name in set(current) & set(head):
+        cur_line, cur_pc, cur_cc = current[name]
+        _, head_pc, head_cc = head[name]
         changes = []
         if cur_pc != head_pc:
             changes.append(f"params:{head_pc}->{cur_pc}")
@@ -707,17 +665,32 @@ def structural_diff(file_path: str) -> list[dict[str, Any]]:
         if changes:
             findings.append(
                 _make_measurement(
-                    "diff_function_changed",
-                    name,
-                    0,
-                    None,
-                    cur_line,
-                    file_path,
+                    "diff_function_changed", name, 0, None, {"file": file_path, "line": cur_line},
                     detail=", ".join(changes),
                 )
             )
 
     return findings
+
+
+def structural_diff(file_path: str) -> list[dict[str, Any]]:
+    """Compare current file against git HEAD for added / removed / changed functions."""
+    head_code = _fetch_git_head(file_path)
+    if head_code is None:
+        return []
+
+    try:
+        current_tree, current_data, lang = parse_file(file_path)
+    except ValueError:
+        return []
+
+    parser = _get_parser_for_file(file_path)[0]
+    head_tree = parser.parse(head_code)
+
+    current_funcs = _parse_func_defs(current_tree, current_data, lang)
+    head_funcs = _parse_func_defs(head_tree, head_code, lang)
+
+    return _compute_diff_changes(current_funcs, head_funcs, file_path)
 
 
 def _estimate_cc(func_node: Any) -> int:
@@ -736,7 +709,7 @@ def _estimate_cc(func_node: Any) -> int:
 
 
 def _get_parser_for_file(path: str) -> tuple[Any, str]:
-    """Return (parser, language_name) for a file path. Duplicated from parse_file."""
+    """Return (parser, language_name) for a file path."""
     from prism.engine.languages import extension_to_language, get_parser
 
     ext = Path(path).suffix.lower()
@@ -815,8 +788,7 @@ def _walk_if_conditions(
                         func_name,
                         count,
                         3,
-                        line,
-                        file_path,
+                        {"file": file_path, "line": line},
                         detail=condition_text,
                     )
                 )
@@ -903,8 +875,7 @@ def measure_god_class(tree: Tree, data: bytes, file_path: str, lang: str) -> lis
                     class_name,
                     method_count,
                     max_methods,
-                    line,
-                    file_path,
+                    {"file": file_path, "line": line},
                     detail=", ".join(issues),
                     total_lines=total_lines,
                     dependency_count=dep_count,
@@ -925,24 +896,46 @@ def _count_children_by_type(node: Any, *types: str) -> int:
     return count
 
 
+def _find_init_method(body_node: Any, data: bytes) -> Any | None:
+    """Find the __init__ method definition in a class body."""
+    for child in body_node.children:
+        if child.type != "function_definition":
+            continue
+        first_line = _text(data, child).split("\n")[0]
+        if "__init__" in first_line:
+            return child
+    return None
+
+
+def _find_params_node(func_node: Any) -> Any | None:
+    """Find the parameters node in a function definition."""
+    for child in func_node.children:
+        if child.type == "parameters":
+            return child
+    return None
+
+
+def _count_service_params(params_node: Any, data: bytes) -> int:
+    """Count non-self, non-private params that look like service dependencies."""
+    count = 0
+    for p in params_node.children:
+        if p.type not in ("identifier", "typed_parameter", "default_parameter"):
+            continue
+        text = _text(data, p)
+        if text not in ("self", "cls") and not text.startswith("_"):
+            count += 1
+    return count
+
+
 def _count_init_deps(body_node: Any, data: bytes) -> int:
     """Count dependencies in __init__ parameters that look like services."""
-    # Look for __init__ method
-    for child in body_node.children:
-        if child.type == "function_definition":
-            func_text = _text(data, child)
-            if "__init__" in func_text.split("\n")[0]:
-                # Count non-self parameters
-                count = 0
-                for param_child in child.children:
-                    if param_child.type == "parameters":
-                        for p in param_child.children:
-                            text = _text(data, p)
-                            if p.type in ("identifier", "typed_parameter", "default_parameter"):
-                                if text not in ("self", "cls") and not text.startswith("_"):
-                                    count += 1
-                return count - 1 if count > 0 else 0  # subtract self
-    return 0
+    init_method = _find_init_method(body_node, data)
+    if init_method is None:
+        return 0
+    params_node = _find_params_node(init_method)
+    if params_node is None:
+        return 0
+    return _count_service_params(params_node, data)
 
 
 # ── Error handling coverage ──────────────────────────────────────────────
@@ -1026,8 +1019,7 @@ def measure_error_handling(
                     func_name,
                     round(coverage, 2),
                     0.8,
-                    line,
-                    file_path,
+                    {"file": file_path, "line": line},
                     detail=f"{unguarded} of {total} risky calls unguarded",
                 )
             )
@@ -1140,8 +1132,7 @@ def measure_visibility_ratio(
                 Path(file_path).stem,
                 round(public_ratio, 2),
                 0.9,
-                1,
-                file_path,
+                {"file": file_path, "line": 1},
                 detail=f"{public} public, {private} private — no encapsulation",
             )
         )
@@ -1175,8 +1166,7 @@ def measure_import_depth(
                     import_text,
                     depth,
                     3,
-                    line,
-                    file_path,
+                    {"file": file_path, "line": line},
                 )
             )
 
@@ -1230,8 +1220,7 @@ def measure_code_clones(tree: Tree, data: bytes, file_path: str, lang: str) -> l
                         a,
                         round(similarity, 2),
                         0.8,
-                        func_lines[a],
-                        file_path,
+                        {"file": file_path, "line": func_lines[a]},
                         detail=f"similar to {b} ({round(similarity * 100)}%)",
                     )
                 )
@@ -1338,8 +1327,7 @@ def measure_function_purity(
                     func_name,
                     len(issues),
                     1,
-                    line,
-                    file_path,
+                    {"file": file_path, "line": line},
                     detail="; ".join(issues),
                 )
             )
@@ -1478,6 +1466,7 @@ def run(file_path: str, project_files: list[str] | None = None) -> list[dict[str
     findings.extend(measure_import_depth(tree, data, file_path, lang))
     findings.extend(measure_code_clones(tree, data, file_path, lang))
     findings.extend(measure_function_purity(tree, data, file_path, lang))
+    findings.extend(structural_diff(file_path))
 
     return findings
 

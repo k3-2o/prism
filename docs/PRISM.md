@@ -83,12 +83,12 @@ cd ~/prism
 uv sync
 
 # Run
-uv run prism path/to/file.py              # default: tree-sitter + curated rules (~10s)
-uv run prism --structure-only file.py     # tree-sitter only (~0.5s)
-uv run prism --community file.py          # + community Semgrep rules (~50s)
+prism path/to/file.py              # default: tree-sitter + curated rules (~10s)
+prism --structure-only file.py     # tree-sitter only (~0.5s)
+prism --community file.py          # + community Semgrep rules (~50s)
 
 # Project-wide analysis
-uv run prism path/to/directory/
+prism path/to/directory/
 
 # Output is JSON to stdout
 ```
@@ -274,19 +274,19 @@ The agent decides which mode to call based on context. The pi extension exposes 
 
 ```bash
 # Structure-only (fast iteration)
-uv run prism --structure-only src/auth.py
+prism --structure-only src/auth.py
 
 # Default (curated rules)
-uv run prism src/auth.py
+prism src/auth.py
 
 # Full audit with community rules
-uv run prism --community src/auth.py
+prism --community src/auth.py
 
 # Project-wide analysis
-uv run prism src/
+prism src/
 
 # Working directory mode
-cd ~/project && uv run prism .
+cd ~/project && prism .
 ```
 
 ---
@@ -382,6 +382,16 @@ The skill replaces the previous TypeScript extension. Instead of a custom tool
 call, the model reads the SKILL.md (loaded on-demand by the harness), learns
 PRISM's philosophy and workflow, and calls the CLI directly via `bash`.
 
+The SKILL.md was rewritten in Session 7 to include:
+
+- **Conditions for use** — when PRISM helps vs when to skip it
+- **Judgment-first framing** — PRISM is a counter, not a judge. The model must read the code and decide.
+- **Adversarial 5-step workflow** — call PRISM, read output skeptically, read the files yourself, use PRISM to catch your own blind spots, then decide what to act on
+- **Response pattern** — an optional 4-part structure (what PRISM found → what you read → what you decided → what you're doing) that keeps judgment visible before action
+- **Common pitfalls** — over-indexing on thresholds, trusting dead code blindly, skipping file reads
+
+The skill also includes a `compatibility` field requiring Python 3.12+ and uv.
+
 **Install:**
 
 ```bash
@@ -396,14 +406,15 @@ cp docs/_meta.json ~/.pi/agent/skills/prism/_meta.json
 The skill teaches the model:
 - PRISM's philosophy (counter, not judge)
 - Three speed tiers and when to use each
-- The 5-step workflow: call → acknowledge → read → review adversarially → decide
+- The 5-step adversarial workflow: call → read with skepticism → read the code → review adversarially → decide
 - What PRISM does NOT measure (logical correctness, validation, naming, security, etc.)
+- A suggested response structure that forces judgment before action
 
 ---
 
 ## 8. Custom Semgrep Rules — Agent-Driven
 
-PRISM does NOT ship a curated library of Semgrep rules for every domain. Writing good rules requires domain expertise that PRISM doesn't have. Instead, PRISM ships **5 example rules** showing the format. The agent researches its own domain and writes its own rules.
+PRISM does NOT ship a curated library of Semgrep rules for every domain. Writing good rules requires domain expertise that PRISM doesn't have. Instead, PRISM ships **11 example rules** (5 Python + 6 TypeScript) showing the format. The agent researches its own domain and writes its own rules.
 
 **To generate rules for your project, give your agent a prompt like:**
 
@@ -415,7 +426,9 @@ PRISM does NOT ship a curated library of Semgrep rules for every domain. Writing
 
 ### Example Rules (Shipped as Templates)
 
-Five rules shipped in `src/prism/rules/` to demonstrate the format:
+Eleven rules shipped in `src/prism/rules/` to demonstrate the format across two languages:
+
+**Python rules (5):**
 
 | Rule ID | What It Detects | Example |
 |---|---|---|
@@ -426,6 +439,17 @@ Five rules shipped in `src/prism/rules/` to demonstrate the format:
 | `prism.correctness.is-with-string-literal` | `is` used with string literal | `if x is "hello":` should be `if x == "hello":` |
 | `prism.correctness.unused-shutil-return` | `shutil.rmtree()` without error handling | `shutil.rmtree(path)` can raise PermissionError |
 
+**TypeScript rules (6):**
+
+| Rule ID | What It Detects | Example |
+|---|---|---|
+| `prism.ts.console-in-extension` | `console.log/error/warn/debug` in pi extensions | Should use `ctx.ui.notify()` instead |
+| `prism.ts.process-exit-magic` | `process.exit()` with magic number | Use named exit code constants |
+| `prism.ts.non-null-assertion` | `variable!` non-null assertion | Bypasses TypeScript type checking |
+| `prism.ts.any-type` | `: any` type annotation | Use `unknown` with runtime validation |
+| `prism.ts.unhandled-promise` | `.then()` without `.catch()` or await | Promise rejections crash Node.js |
+| `prism.ts.async-without-await` | `.then()` inside async function | Prefer await with try/catch |
+
 ### Semgrep Community Coverage vs PRISM's Gap
 
 The Semgrep community rule library (downloaded via `--community`) focuses heavily on **web security and IaC misconfigurations** across many languages. It barely touches dev tooling, correctness, or architecture in any language.
@@ -434,7 +458,7 @@ The Semgrep community rule library (downloaded via `--community`) focuses heavil
 |---|---|---|---|
 | Python | **378** | SQLi, XSS, command injection, deserialization, crypto, secrets, subprocess | Exit codes, print-vs-logging, signal handling, comparison pitfalls, unchecked returns |
 | JavaScript | **213** | XSS, DOM manipulation, prototype pollution, eval, insecure fetch | Console.log in libs, missing error handling, arg count mismatches |
-| TypeScript | **207** | Same as JS + React/Angular patterns | Same as JS |
+| TypeScript | **207** | Same as JS + React/Angular patterns | Console.log in extensions, non-null assertions, any types, unhandled promises, async mixups, magic process.exit |
 | Terraform/HCL | **364** | Open S3 buckets, unencrypted storage, overly permissive IAM | Block nesting depth, unused blocks, reference chains |
 | Java | **128** | SQLi, XXE, deserialization, path traversal, crypto | Method parameter counts, nested try blocks, unused private methods |
 | Go | **97** | SQLi, command injection, HTTP security, crypto | Exposed goroutines, unchecked errors, fmt.Println in libraries |
@@ -443,7 +467,7 @@ The Semgrep community rule library (downloaded via `--community`) focuses heavil
 | C | **17** | Buffer overflow (limited), format string, memory | Function parameter count, nesting, dead code |
 | Rust | **11** | Very few — unsafe blocks, command injection | Parameter count, nesting depth, dead code, function length |
 
-**The gap is consistent across all languages:** Community rules are strong at "injection goes in, secrets leak out" but weak at "this function is too long, too nested, has too many parameters, or these exports are dead." PRISM's curated rules address the second category — but currently only for Python. Expanding curated rules to other languages means writing the same logical patterns with different syntax for each language.
+**The gap is consistent across all languages:** Community rules are strong at "injection goes in, secrets leak out" but weak at "this function is too long, too nested, has too many parameters, or these exports are dead." PRISM's curated rules address the second category. With the addition of 6 TypeScript rules in Session 7, PRISM now covers dev-tooling patterns for both Python and TypeScript. Expanding curated rules to more languages means writing the same logical patterns with different syntax for each language.
 
 **Rule format:** Standard Semgrep YAML. Each file contains a `rules:` list with standard Semgrep fields. Rules are loaded individually via `--config <file>` for each YAML file (Semgrep does NOT recurse into directories).
 
@@ -544,7 +568,7 @@ The test directly informed two output design decisions:
 - Writing good Semgrep rules requires domain expertise PRISM doesn't have
 - The agent already has the domain context — it knows what project it's building
 - The agent can research CVE databases, OWASP guides, and known patterns for the specific domain
-- PRISM's 5 shipped rules serve as format examples, not as the complete set
+- PRISM's 11 shipped rules (5 Python + 6 TypeScript) serve as format examples, not as the complete set
 
 **Workflow:**
 ```
@@ -646,6 +670,13 @@ Agent: "I'm building a CLI tool in Rust"
 **Decision:** Use `uv` for dependency management, virtual environments, and running. Use `ruff` for linting and formatting.  
 **Consequence:** No pip, no venv, no setup.py, no black/flake8/isort. Single toolchain.
 
+### ADR-13: Configurable thresholds considered and rejected
+
+**Status:** Superseded by reconsideration  
+**Context:** An audit item proposed making thresholds configurable via `pyproject.toml`. The reasoning was that hardcoded thresholds (params >6, nesting >4, length >60) wouldn't fit all projects and would produce noise.  
+**Decision:** Rejected after re-examination. Configurable thresholds would let projects silently hide their smelliest code from PRISM. A Django app with 8-param views everywhere is still smelly — the agent should know about it, judge it, and decide whether to act. Configuring the threshold to 10 would suppress the signal entirely. This contradicts PRISM's philosophy (counter, not judge): PRISM counts, the agent judges. Making thresholds configurable is pre-judging.  
+**Consequence:** Thresholds remain hardcoded per-language. The agent reads the output, applies context, and decides. The Skill's adversarial workflow and response pattern formalize this judgment step.
+
 ---
 
 ## 12. Known Issues & Caveats
@@ -670,7 +701,7 @@ Semgrep's Python CLI takes ~8-10s to start even with zero rules. This is a Semgr
 
 ### Curated Rules Are Examples, Not Exhaustive
 
-The 5 shipped rules are format examples, not a complete library. The agent is expected to research its own domain and write rules for the patterns that matter. See the README for the agent prompt recipe.
+The 11 shipped rules (5 Python + 6 TypeScript) are format examples, not a complete library. The agent is expected to research its own domain and write rules for the patterns that matter. See the README for the agent prompt recipe.
 
 ### Language Detection Is Extension-Based
 
@@ -680,9 +711,9 @@ Language is detected solely from file extension. A `.js` file is always JavaScri
 
 Each language's queries use different AST node type names. Adding a new language requires testing each query individually — "Impossible pattern" and "Invalid node type" errors are common during development. Single-line query strings avoid Python whitespace issues with triple-quoted strings in the registry dict.
 
-### Semgrep Rules Are Python-Only
+### Semgrep Rules Are Python + TypeScript
 
-The 5 curated Semgrep rules and community rules (opt-in) only work on Python files. When running on non-Python files, Semgrep findings are empty. Only tree-sitter measurements are available for non-Python languages.
+The 5 Python curated Semgrep rules and community rules (opt-in) only work on Python files. The 6 TypeScript curated rules work on `.ts` and `.js` files. When running on other languages (Go, Rust, Java, etc.), Semgrep findings from curated rules will be empty. Only tree-sitter measurements are available for those languages.
 
 ### Tree-Sitter's Ceiling — What Structural Analysis Cannot Measure
 
@@ -735,7 +766,7 @@ The 5 existing rules are a start. Priority candidates:
 
 ### Q3: What are the right default thresholds?
 
-Parameter count >6, nesting depth >4, function length >60 — these were chosen as reasonable defaults but may need tuning per project or per language. Should thresholds be configurable?
+Parameter count >6, nesting depth >4, function length >60 — these were chosen as reasonable defaults but may need tuning per project or per language. Configurable thresholds were considered and rejected (see ADR-13): the agent should judge context, not silently hide signals. Thresholds remain hardcoded per-language.
 
 ### Q4: Python-only or multi-language?
 
@@ -763,8 +794,7 @@ Currently at `~/.pi/agent/skills/prism/SKILL.md` and mirrored in the repo at `do
 
 ### Short-term (if continuing)
 
-- **More curated rules** — Expand to 10-15 rules covering API gaps, architecture, async patterns
-- **Configurable thresholds** — Allow user to set parameter count, nesting, length thresholds per-project
+- **More curated rules** — Expand beyond 11 to cover Go, Rust, or Java dev-tooling patterns
 - **Test suite** — Unit tests for tree-sitter queries, integration tests for Semgrep runner, output format validation
 - **MCP server** — Expose PRISM as an MCP tool for Claude Desktop and other MCP-compatible clients
 
@@ -908,6 +938,26 @@ All three are language-agnostic, driven by `decision_types` and `boolean_operato
 - Configuration for all three lives in the language registry (`decision_types`, thresholds)
 
 **Total metrics:** 11 tree-sitter measurements + Semgrep findings + structural diff.
+
+### Session 7 (2026-06-05): Self-audit, self-owns fixed, SKILL.md rewrite
+
+**Duration:** ~2 hours  
+**Outcome:** PRISM ran on its own codebase, revealing 71 measurements including self-contradictions. Key ironies found and fixed.
+
+**Self-owns fixed:**
+1. **`_make_measurement` (7 params → 6):** The function that flags excessive parameters had 7 itself. Merged `line` and `file_path` into a single `location` dict parameter, dropping to 6 — below the threshold.
+2. **`structural_diff` (144-line dead monster → 4 helpers):** A function that measures structural complexity was 144 lines, cyclomatic complexity 34, cognitive complexity 139 — and dead code (no callers). Refactored into `_fetch_git_head`, `_parse_func_defs`, `_compute_diff_changes`, and a thin `structural_diff` orchestrator. Wired into `run()` so it's no longer dead. Complexity dropped from 34 to 3.
+3. **`_count_init_deps` (nesting 9 → 2):** The god-class dependency counter had nesting depth 9 and cognitive complexity 81. Split into `_find_init_method`, `_find_params_node`, `_count_service_params`, and a thin `_count_init_deps` wrapper. Complexity dropped from 10 to 3.
+4. **`parse_file` error handling:** Added try/except around `read_bytes()` and `parser.parse()` — no longer flagged for 0% error-handling coverage.
+5. **All `_make_measurement` call sites (19 total):** Updated to pass `{"file": ..., "line": ...}` dict instead of separate positional args.
+
+**Other changes:**
+- **SKILL.md rewritten** — Now follows Agent Skills spec with proper frontmatter (name, description, compatibility), conditions for use, adversarial 5-step workflow, suggested response pattern, and common pitfalls. Emphasizes judgment-first: PRISM is a counter, not a judge.
+- **ADR-13 added** — Configurable thresholds considered and rejected. The agent should judge context, not silently suppress signals.
+- **Open Question Q3 updated** — Reflects that thresholds remain hardcoded per-language per ADR-13.
+- **Future Work updated** — Configurable thresholds removed from short-term list.
+
+**Key insight from the session:** Running PRISM on itself was more valuable than any synthetic test. It caught real structural problems in PRISM's own code that no one had noticed. This directly supports the value of real-world auditing over synthetic validation.
 
 ---
 

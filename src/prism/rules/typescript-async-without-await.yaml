@@ -1,0 +1,20 @@
+rules:
+  - id: prism.ts.async-without-await
+    patterns:
+      - pattern-inside: |
+          async function $FUNC(...) { ... }
+      - pattern: |
+          $PROMISE.then(...)
+      - pattern-not: |
+          await $PROMISE.then(...)
+      - pattern-not: |
+          return $PROMISE.then(...)
+    message: >
+      In async functions, use await instead of .then() chains.
+      Mixing async/await with .then() makes error handling inconsistent
+      and the control flow harder to follow. Prefer try/catch with await.
+    languages: [typescript, javascript]
+    severity: INFO
+    metadata:
+      category: "correctness"
+      source: "prism-curated"

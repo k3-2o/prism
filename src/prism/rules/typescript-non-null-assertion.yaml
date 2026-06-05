@@ -1,0 +1,19 @@
+rules:
+  - id: prism.ts.non-null-assertion
+    patterns:
+      - pattern-not: |
+          (function test() { $X!; })()
+      - pattern: |
+          $X!
+      - pattern-inside: |
+          function $FUNC(...) { ... }
+    message: >
+      Non-null assertion (!) bypasses TypeScript's type checking.
+      If a value can be null or undefined, handle it explicitly with an if check
+      or optional chaining (?.) rather than asserting it away.
+      This is a common source of runtime crashes in extensions.
+    languages: [typescript]
+    severity: WARNING
+    metadata:
+      category: "correctness"
+      source: "prism-curated"
