@@ -1180,17 +1180,17 @@ def measure_code_clones(tree: Tree, data: bytes, file_path: str, lang: str) -> l
     """Detect structurally similar functions (code clones).
 
     Builds a structural signature for each function body by recording the
-    sequence of non-identifier, non-literal AST node types. Two functions
-    with similar signatures but different names are likely clones.
+    sequence of non-identifier, non-literal AST node types (limited to 4
+    levels deep). Pairwise comparison uses n-gram Jaccard similarity for
+    O(m+n) per pair instead of O(m*n) LCS.
 
-    Uses a simplified similarity: normalized signature length overlap.
     Threshold: >0.8 structural similarity without being identical functions.
     """
     queries = get_queries(lang)
     findings: list[dict[str, Any]] = []
 
     # Build structural signatures for each function
-    funcs: dict[str, list[str]] = {}  # name -> node type sequence
+    funcs: dict[str, list[str]] = {}
     func_lines: dict[str, int] = {}
 
     for _pat_idx, captures in _get_matches(queries["functions"], tree.root_node):
@@ -1202,36 +1202,47 @@ def measure_code_clones(tree: Tree, data: bytes, file_path: str, lang: str) -> l
             elif name == "func" and nodes:
                 func_node = nodes[0]
         if func_name and func_node:
-            sig = _build_structural_signature(func_node)
-            if len(sig) >= 10:  # Only consider functions with meaningful structure
+            sig = _build_structural_signature(func_node, max_depth=4)
+            if len(sig) >= 10:
                 funcs[func_name] = sig
                 func_lines[func_name] = func_node.start_point[0] + 1
 
-    # Compare all pairs
+    # Compare all pairs with length prefilter
     names = list(funcs.keys())
     for i in range(len(names)):
+        sig_a = funcs[names[i]]
+        len_a = len(sig_a)
         for j in range(i + 1, len(names)):
-            a, b = names[i], names[j]
-            similarity = _signature_similarity(funcs[a], funcs[b])
+            sig_b = funcs[names[j]]
+            len_b = len(sig_b)
+            # Quick length check: if lengths differ by >25%, similarity can't exceed 0.8
+            if len_a < len_b:
+                if len_a / len_b < 0.75:
+                    continue
+            else:
+                if len_b / len_a < 0.75:
+                    continue
+            similarity = _signature_similarity(sig_a, sig_b)
             if similarity > 0.8:
                 findings.append(
                     _make_measurement(
                         "code_clone",
-                        a,
+                        names[i],
                         round(similarity, 2),
                         0.8,
-                        {"file": file_path, "line": func_lines[a]},
-                        detail=f"similar to {b} ({round(similarity * 100)}%)",
+                        {"file": file_path, "line": func_lines[names[i]]},
+                        detail=f"similar to {names[j]} ({round(similarity * 100)}%)",
                     )
                 )
 
     return findings
 
 
-def _build_structural_signature(node: Any) -> list[str]:
+def _build_structural_signature(node: Any, max_depth: int = 6) -> list[str]:
     """Walk a function body and record the sequence of meaningful node types.
 
-    Skips identifiers and literals to focus on structure (if, for, while, call, etc.).
+    Limits depth to `max_depth` to keep signatures short. Skips identifiers
+    and literals to focus on structure (if, for, while, call, etc.).
     """
     _SKIP_TYPES = {
         "identifier",
@@ -1245,35 +1256,43 @@ def _build_structural_signature(node: Any) -> list[str]:
         "null",
         "None",
         ":",
+        ".",
+        ",",
+        ";",
     }
     sig: list[str] = []
 
-    def walk(n: Any) -> None:
+    def walk(n: Any, depth: int) -> None:
+        if depth > max_depth:
+            return
         if n.type not in _SKIP_TYPES:
             sig.append(n.type)
-        # Only go a few levels deep to avoid excessive detail
         for child in n.children:
-            walk(child)
+            walk(child, depth + 1)
 
-    walk(node)
+    walk(node, 0)
     return sig
 
 
 def _signature_similarity(a: list[str], b: list[str]) -> float:
-    """Compute overlap coefficient between two structural signatures."""
+    """Compute similarity using n-gram Jaccard coefficient (O(m+n)).
+
+    Breaks each signature into trigrams, then computes
+    |intersection| / max(|a|, |b|) over the trigram sets.
+    """
     if not a or not b:
         return 0.0
-    # Use longest common subsequence ratio as similarity metric
-    m, n = len(a), len(b)
-    dp = [[0] * (n + 1) for _ in range(m + 1)]
-    for i in range(1, m + 1):
-        for j in range(1, n + 1):
-            if a[i - 1] == b[j - 1]:
-                dp[i][j] = dp[i - 1][j - 1] + 1
-            else:
-                dp[i][j] = max(dp[i - 1][j], dp[i][j - 1])
-    lcs = dp[m][n]
-    return lcs / max(m, n)
+
+    def trigrams(seq: list[str]) -> set[tuple[str, str, str]]:
+        return {tuple(seq[i : i + 3]) for i in range(len(seq) - 2)}
+
+    set_a = trigrams(a)
+    set_b = trigrams(b)
+    if not set_a or not set_b:
+        return 0.0
+
+    intersection = set_a & set_b
+    return len(intersection) / max(len(set_a), len(set_b))
 
 
 # ── Function purity ──────────────────────────────────────────────────────
