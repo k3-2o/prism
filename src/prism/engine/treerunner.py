@@ -67,13 +67,19 @@ def _get_parser_for_file(path: str) -> tuple[Any, str]:
 
 
 def _get_matches(query: Any, root: Any) -> list[tuple[int, dict[str, list[Any]]]]:
-    cursor = QueryCursor(query)
-    return list(cursor.matches(root))
+    try:
+        cursor = QueryCursor(query)
+        return list(cursor.matches(root))
+    except Exception:
+        return []
 
 
 def _get_captures(query: Any, root: Any) -> dict[str, list[Any]]:
-    cursor = QueryCursor(query)
-    return cursor.captures(root)
+    try:
+        cursor = QueryCursor(query)
+        return cursor.captures(root)
+    except Exception:
+        return {}
 
 
 # ── Measurement helpers ──────────────────────────────────────────────────
@@ -684,8 +690,11 @@ def structural_diff(file_path: str) -> list[dict[str, Any]]:
     except ValueError:
         return []
 
-    parser = _get_parser_for_file(file_path)[0]
-    head_tree = parser.parse(head_code)
+    try:
+        parser = _get_parser_for_file(file_path)[0]
+        head_tree = parser.parse(head_code)
+    except Exception:
+        return []
 
     current_funcs = _parse_func_defs(current_tree, current_data, lang)
     head_funcs = _parse_func_defs(head_tree, head_code, lang)

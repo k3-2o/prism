@@ -39,10 +39,6 @@ def _make_parser(import_path: str, lang_attr: str = "language") -> Parser:
     return parser
 
 
-def _build_query(lang: Language, query_str: str) -> Query:
-    return Query(lang, query_str)
-
-
 # ── Language definitions ────────────────────────────────────────────────
 
 LANGUAGES: dict[str, LanguageDef] = {}
