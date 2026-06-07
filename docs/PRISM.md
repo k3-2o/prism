@@ -180,13 +180,13 @@ This means measurement functions in `treerunner.py` are language-agnostic — th
 
 ### Three Speed Tiers (Design Intent)
 
-| Mode | Flag | Intended Use |
+| Mode | Flag | Speed | Intended Use |
 |---|---|---|---|
-| **Structure-only** | `--structure-only` |  Every agent iteration — fast, tree-sitter only |
-| **Default** | *(none)* | Every 3-5 iterations — adds curated Semgrep rules |
-| **Community** | `--community` |  Before commit, final review — adds full Semgrep community rules |
+| **Structure-only** | `--structure-only` | Fast | Every agent iteration — tree-sitter only |
+| **Default** | *(none)* | Moderate | Every 3-5 iterations — adds curated Semgrep rules |
+| **Community** | `--community` | Slow | Before commit, final review — adds full Semgrep community rules |
 
-The agent decides which mode to call based on context. The pi extension exposes all three via the `mode` parameter.
+Suitable for single files (~1s), full projects scale with file count. The agent decides which mode to call based on context. The pi extension exposes all three via the `mode` parameter.
 
 ---
 

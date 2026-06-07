@@ -35,11 +35,13 @@ prism src/file.py
 
 ## Speed Tiers
 
-| Mode | Command | What It Does |
-| --- | --- | --- |---|
-| Structure-only | `prism --structure-only <path>` |  Tree-sitter measurements only |
-| Default | `prism <path>` |  Above + 11 curated Semgrep rules |
-| Community | `prism --community <path>` |  Above + full Semgrep community library |
+| Mode | Command | Speed | What It Does |
+|---|---|---|---|
+| Structure-only | `prism --structure-only <path>` | Fast | Tree-sitter measurements only |
+| Default | `prism <path>` | Moderate | Above + 11 curated Semgrep rules |
+| Community | `prism --community <path>` | Slow | Above + full Semgrep community library |
+
+Suitable for single files (~1s), full projects scale with file count.
 
 ## Metrics (16 total)
 
