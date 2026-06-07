@@ -46,32 +46,45 @@ def find_cross_file_callers(
     function_name: str,
     target_file: str,
     project_files: list[str],
+    _cache: dict | None = None,
 ) -> list[dict[str, Any]]:
-    """Search all project files for calls to function_name outside target_file."""
+    """Search all project files for calls to function_name outside target_file.
+
+    Internal _cache dict avoids re-parsing files across repeated calls.
+    """
     callers: list[dict[str, Any]] = []
+    cache = _cache if _cache is not None else {}
 
     for fpath in project_files:
         if fpath == target_file:
             continue
-        try:
-            data = Path(fpath).read_bytes()
-        except Exception:
-            continue
 
-        ext = Path(fpath).suffix.lower()
-        lang = extension_to_language(ext)
-        if not lang:
-            continue
+        # Use cached parse result if available
+        cached = cache.get(fpath)
+        if cached:
+            tree, data, lang, query = cached
+        else:
+            try:
+                data = Path(fpath).read_bytes()
+            except Exception:
+                continue
 
-        try:
-            parser = get_parser(lang)
-            queries = get_queries(lang)
-        except ValueError:
-            continue
+            ext = Path(fpath).suffix.lower()
+            lang = extension_to_language(ext)
+            if not lang:
+                continue
 
-        tree = parser.parse(data)
-        cursor = QueryCursor(queries["calls"])
+            try:
+                parser = get_parser(lang)
+                queries = get_queries(lang)
+            except ValueError:
+                continue
 
+            tree = parser.parse(data)
+            query = queries["calls"]
+            cache[fpath] = (tree, data, lang, query)
+
+        cursor = QueryCursor(query)
         for _pat_idx, captures in cursor.matches(tree.root_node):
             for name, nodes in captures.items():
                 if name != "name":
@@ -171,6 +184,7 @@ def enrich_by_line(
     finding: dict[str, Any],
     target_file: str,
     project_files: list[str] | None,
+    _cache: dict | None = None,
 ) -> dict[str, Any]:
     """Enrich a Semgrep finding by finding its enclosing function."""
     line = finding.get("location", {}).get("line", 0)
@@ -198,7 +212,9 @@ def enrich_by_line(
 
         func_name = func_info.get("function", "")
         if func_name and project_files:
-            callers = find_cross_file_callers(func_name, target_file, project_files)
+            callers = find_cross_file_callers(
+                func_name, target_file, project_files, _cache=_cache
+            )
             ctx["callers"] = callers
 
     return finding
@@ -208,18 +224,82 @@ def enrich_measurements(
     items: list[dict[str, Any]],
     target_file: str,
     project_files: list[str] | None,
+    fast: bool = False,
 ) -> list[dict[str, Any]]:
-    """Attach cross-file caller information to each measurement."""
+    """Attach cross-file caller information to each measurement.
+
+    If fast=True, use string search (grep-like) instead of full tree-sitter
+    parsing. Less precise but ~50x faster — suitable for structure-only mode.
+    """
     if not project_files:
         return items
 
+    if fast:
+        return _enrich_fast(items, target_file, project_files)
+
+    cache: dict = {}
     enriched: list[dict[str, Any]] = []
     for item in items:
         func_name = item.get("function", "")
         if func_name:
-            callers = find_cross_file_callers(func_name, target_file, project_files)
+            callers = find_cross_file_callers(
+                func_name, target_file, project_files, _cache=cache
+            )
             if callers:
                 item.setdefault("context", {})["callers"] = callers
         enriched.append(item)
 
     return enriched
+
+
+def _enrich_fast(
+    items: list[dict[str, Any]],
+    target_file: str,
+    project_files: list[str],
+) -> list[dict[str, Any]]:
+    """Fast caller lookup using combined regex (grep-like).
+
+    Reads each project file once and searches for all function names in a
+    single pass using an alternation pattern. Much faster than tree-sitter
+    parsing but may produce false positives (matches in comments, strings).
+    """
+    import re
+
+    func_names = [item.get("function", "") for item in items if item.get("function")]
+    if not func_names:
+        return items
+
+    name_to_callers: dict[str, list[dict[str, Any]]] = {n: [] for n in func_names}
+    seen: set[tuple[str, str, int]] = set()
+
+    # Single regex matching any function name
+    sorted_names = sorted(func_names, key=len, reverse=True)
+    pattern = re.compile(r'\b(' + '|'.join(re.escape(n) for n in sorted_names) + r')\b')
+
+    for fpath in project_files:
+        if fpath == target_file:
+            continue
+        try:
+            text = Path(fpath).read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+
+        for m in pattern.finditer(text):
+            name = m.group(1)
+            line = text[:m.start()].count("\n") + 1
+            key = (fpath, name, line)
+            if key not in seen:
+                seen.add(key)
+                name_to_callers[name].append({
+                    "function": name,
+                    "file": fpath,
+                    "line": line,
+                })
+
+    for item in items:
+        name = item.get("function", "")
+        callers = name_to_callers.get(name, [])
+        if callers:
+            item.setdefault("context", {})["callers"] = callers
+
+    return items

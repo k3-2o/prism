@@ -18,7 +18,6 @@
 6. [Output Format (JSON Schema)](#6-output-format-json-schema)
 7. [Pi Extension](#7-pi-extension)
 8. [Curated Semgrep Rules](#8-curated-semgrep-rules)
-9. [Performance Benchmarks](#9-performance-benchmarks)
 10. [Validation Results](#10-validation-results)
 11. [Architecture Decision Record](#11-architecture-decision-record)
 12. [Known Issues & Caveats](#12-known-issues--caveats)
@@ -32,10 +31,10 @@
 
 PRISM is a CLI tool that produces structured JSON about code across 11 languages + HCL. It combines two analysis engines:
 
-| Engine | What It Measures | Latency |
+| Engine | What It Measures |
 |---|---|---|
-| **Tree-sitter** (AST queries) | Parameter counts, nesting depth, function length, dead code (per-file), cyclic imports (cross-file), callers (cross-file) | ~0.5s |
-| **Semgrep** (pattern matching) | Curated rules: dev tooling exit codes, print vs logging, signal handling, comparison pitfalls, unchecked errors. Optional community rules: SQLi, XSS, command injection, insecure deserialization, etc. | ~10s (curated), ~50s (+ community) |
+| **Tree-sitter** (AST queries) | Parameter counts, nesting depth, function length, dead code (per-file), cyclic imports (cross-file), callers (cross-file) |
+| **Semgrep** (pattern matching) | Curated rules: dev tooling exit codes, print vs logging, signal handling, comparison pitfalls, unchecked errors. Optional community rules: SQLi, XSS, command injection, insecure deserialization, etc. |
 
 ### Supported Languages
 
@@ -83,9 +82,9 @@ cd ~/prism
 uv sync
 
 # Run
-prism path/to/file.py              # default: tree-sitter + curated rules (~10s)
-prism --structure-only file.py     # tree-sitter only (~0.5s)
-prism --community file.py          # + community Semgrep rules (~50s)
+prism path/to/file.py              # default: tree-sitter + curated rules
+prism --structure-only file.py     # tree-sitter only
+prism --community file.py          # + community Semgrep rules
 
 # Project-wide analysis
 prism path/to/directory/
@@ -181,11 +180,11 @@ This means measurement functions in `treerunner.py` are language-agnostic — th
 
 ### Three Speed Tiers (Design Intent)
 
-| Mode | Flag | Typical Latency | Intended Use |
+| Mode | Flag | Intended Use |
 |---|---|---|---|
-| **Structure-only** | `--structure-only` | ~0.5s | Every agent iteration — fast, tree-sitter only |
-| **Default** | *(none)* | ~10s | Every 3-5 iterations — adds curated Semgrep rules |
-| **Community** | `--community` | ~50s | Before commit, final review — adds full Semgrep community rules |
+| **Structure-only** | `--structure-only` |  Every agent iteration — fast, tree-sitter only |
+| **Default** | *(none)* | Every 3-5 iterations — adds curated Semgrep rules |
+| **Community** | `--community` |  Before commit, final review — adds full Semgrep community rules |
 
 The agent decides which mode to call based on context. The pi extension exposes all three via the `mode` parameter.
 
@@ -475,20 +474,6 @@ The Semgrep community rule library (downloaded via `--community`) focuses heavil
 
 ---
 
-## 9. Performance Benchmarks
-
-Measured on a 3-file project (30-100 lines each) using `time`:
-
-| Mode | Cold Start | Cached | Notes |
-|---|---|---|---|
-| `--structure-only` | **0.5s** | ~0.3s | No Semgrep overhead |
-| default (curated) | **11s** | ~8-10s | Semgrep Python startup dominates |
-| `--community` | **50s** | ~40-45s | 290 community rules downloaded + parsed |
-
-**The bottleneck is Semgrep's Python startup,** not the rules themselves. Even with 0 rules, Semgrep takes ~8s to start. This is a known limitation of Semgrep's architecture (Python CLI → OCaml engine via subprocess). Mitigation: use `--structure-only` for fast iterations, defer full scans to occasional checkpoints.
-
----
-
 ## 10. Validation Results
 
 A controlled experiment was conducted to test whether PRISM enrichment improves model code fix quality.
@@ -605,15 +590,13 @@ Agent: "I'm building a CLI tool in Rust"
 **Status:** Accepted  
 **Context:** These analysis techniques require whole-program analysis, are imprecise for dynamic languages (Python), and are computationally heavy.  
 **Decision:** Only tree-sitter AST queries survive. The "5-layer stack" collapsed to one layer.  
-**Consequence:** PRISM is fast (~0.5s for structure-only) but cannot detect deep interprocedural bugs. This is an accepted limitation.
+**Consequence:** PRISM is fast (structure-only) but cannot detect deep interprocedural bugs. This is an accepted limitation.
 
 ### ADR-4: Semgrep community rules are opt-in
 
 **Status:** Accepted  
 **Context:** Semgrep community rules take ~40-50s to run due to Python startup overhead + 290 rule parsing.  
 **Decision:** By default, PRISM runs only its 5 bundled curated rules. Community rules require `--community` flag.  
-**Consequence:** Default mode is ~10s (acceptable for occasional use). Community mode is ~50s (acceptable for final audit). Structure-only mode is ~0.5s (acceptable for every iteration).
-
 ### ADR-5: `measurements` not `findings`
 
 **Status:** Accepted  
@@ -845,7 +828,7 @@ Currently at `~/.pi/agent/skills/prism/SKILL.md` and mirrored in the repo at `do
 
 **Validation finding:** PRISM helps when the model can't trivially compute the measurement (large files, cross-file callers, buried metrics). PRISM can hurt on small files by anchoring the model's focus. Mitigated by `measurements` naming + `note` field.
 
-**Performance finding:** Semgrep startup dominates latency (~8s minimum even with 0 rules). Three-tier speed design (`--structure-only` at 0.5s, default at 10s, `--community` at 50s) accepts this limitation.
+**Performance finding:** Semgrep startup dominates latency. Three-tier speed design accepts this limitation.
 
 ### Session 3 (2026-06-01): Multi-language expansion
 

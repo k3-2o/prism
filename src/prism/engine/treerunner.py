@@ -67,19 +67,13 @@ def _get_parser_for_file(path: str) -> tuple[Any, str]:
 
 
 def _get_matches(query: Any, root: Any) -> list[tuple[int, dict[str, list[Any]]]]:
-    try:
-        cursor = QueryCursor(query)
-        return list(cursor.matches(root))
-    except Exception:
-        return []
+    cursor = QueryCursor(query)
+    return list(cursor.matches(root))
 
 
 def _get_captures(query: Any, root: Any) -> dict[str, list[Any]]:
-    try:
-        cursor = QueryCursor(query)
-        return cursor.captures(root)
-    except Exception:
-        return {}
+    cursor = QueryCursor(query)
+    return cursor.captures(root)
 
 
 # ── Measurement helpers ──────────────────────────────────────────────────
@@ -1284,24 +1278,26 @@ def _build_structural_signature(node: Any, max_depth: int = 6) -> list[str]:
 
 
 def _signature_similarity(a: list[str], b: list[str]) -> float:
-    """Compute similarity using n-gram Jaccard coefficient (O(m+n)).
+    """Compute overlap coefficient using LCS ratio.
 
-    Breaks each signature into trigrams, then computes
-    |intersection| / max(|a|, |b|) over the trigram sets.
+    Signatures are short (depth-limited to 4 levels), so LCS is fast enough
+    and more accurate than n-gram Jaccard for structural comparison.
     """
     if not a or not b:
         return 0.0
-
-    def trigrams(seq: list[str]) -> set[tuple[str, str, str]]:
-        return {tuple(seq[i : i + 3]) for i in range(len(seq) - 2)}
-
-    set_a = trigrams(a)
-    set_b = trigrams(b)
-    if not set_a or not set_b:
-        return 0.0
-
-    intersection = set_a & set_b
-    return len(intersection) / max(len(set_a), len(set_b))
+    m, n = len(a), len(b)
+    dp = [[0] * (n + 1) for _ in range(m + 1)]
+    for i in range(1, m + 1):
+        ai = a[i - 1]
+        dp_i = dp[i]
+        dp_im1 = dp[i - 1]
+        for j in range(1, n + 1):
+            if ai == b[j - 1]:
+                dp_i[j] = dp_im1[j - 1] + 1
+            else:
+                dp_i[j] = dp_im1[j] if dp_im1[j] > dp_i[j - 1] else dp_i[j - 1]
+    lcs = dp[m][n]
+    return lcs / max(m, n)
 
 
 # ── Function purity ──────────────────────────────────────────────────────

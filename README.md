@@ -4,9 +4,9 @@ Structural code analysis for AI agent loops. Uses tree-sitter (16 metrics across
 12 languages) + Semgrep (curated rules for dev-tooling correctness gaps).
 
 ```bash
-prism path/to/file.py                # default (~10s)
-prism --structure-only path/         # fast check (~0.5s)
-prism --community path/              # full audit (~50s)
+prism path/to/file.py              
+prism --structure-only path/       
+prism --community path/            
 ```
 
 [![python-3.12](https://img.shields.io/badge/python-3.12-blue)]()
@@ -35,11 +35,11 @@ prism src/file.py
 
 ## Speed Tiers
 
-| Mode | Command | Latency | What It Does |
-|---|---|---|---|
-| Structure-only | `prism --structure-only <path>` | ~0.5s | Tree-sitter measurements only |
-| Default | `prism <path>` | ~10s | Above + 11 curated Semgrep rules |
-| Community | `prism --community <path>` | ~50s | Above + full Semgrep community library |
+| Mode | Command | What It Does |
+| --- | --- | --- |---|
+| Structure-only | `prism --structure-only <path>` |  Tree-sitter measurements only |
+| Default | `prism <path>` |  Above + 11 curated Semgrep rules |
+| Community | `prism --community <path>` |  Above + full Semgrep community library |
 
 ## Metrics (16 total)
 

@@ -26,7 +26,7 @@ def _build_output(path: str, structure_only: bool, include_community: bool) -> d
 
     measurements = treerunner_run(path)
     project_files = discover_project_files(str(p.parent))
-    measurements = enrich_measurements(measurements, path, project_files)
+    measurements = enrich_measurements(measurements, path, project_files, fast=structure_only)
 
     semgrep_findings = _run_semgrep_if_needed(
         path, structure_only, include_community, project_files
@@ -54,8 +54,9 @@ def _run_semgrep_if_needed(
         return []
     raw = run_semgrep(path, prism_rules_dir=_PRISM_RULES_DIR, include_community=include_community)
     enriched = []
+    cache: dict = {}
     for f in raw:
-        enriched.append(enrich_by_line(f, path, project_files))
+        enriched.append(enrich_by_line(f, path, project_files, _cache=cache))
     return enriched
 
 
@@ -91,20 +92,28 @@ def _build_project_output(root: str, structure_only: bool, include_community: bo
 
     all_measurements = treerunner_run_project(files)
 
-    for f in files:
-        file_measurements = [x for x in all_measurements if x.get("location", {}).get("file") == f]
-        other_files = [x for x in files if x != f]
-        enrich_measurements(file_measurements, f, other_files)
+    if not structure_only:
+        for f in files:
+            file_measurements = [x for x in all_measurements if x.get("location", {}).get("file") == f]
+            other_files = [x for x in files if x != f]
+            enrich_measurements(file_measurements, f, other_files)
+    else:
+        for f in files:
+            file_measurements = [x for x in all_measurements if x.get("location", {}).get("file") == f]
+            other_files = [x for x in files if x != f]
+            enrich_measurements(file_measurements, f, other_files, fast=True)
 
     all_community: list[dict] = []
     all_curated: list[dict] = []
-    for f in files:
-        raw = run_semgrep(f, prism_rules_dir=_PRISM_RULES_DIR, include_community=include_community)
-        other_files = [x for x in files if x != f]
-        for finding in raw:
-            finding = enrich_by_line(finding, f, other_files)
-        all_community.extend(x for x in raw if x.get("source") == "semgrep-community")
-        all_curated.extend(x for x in raw if x.get("source") == "semgrep-curated")
+    if not structure_only:
+        semgrep_cache: dict = {}
+        for f in files:
+            raw = run_semgrep(f, prism_rules_dir=_PRISM_RULES_DIR, include_community=include_community)
+            other_files = [x for x in files if x != f]
+            for finding in raw:
+                finding = enrich_by_line(finding, f, other_files, _cache=semgrep_cache)
+            all_community.extend(x for x in raw if x.get("source") == "semgrep-community")
+            all_curated.extend(x for x in raw if x.get("source") == "semgrep-curated")
 
     return {
         "version": __version__,
@@ -124,7 +133,7 @@ def _detect_language(path: str) -> str:
     return lang if lang else "unknown"
 
 
-@click.command()
+@click.command(context_settings=dict(help_option_names=["-h", "--help"]))
 @click.argument("path", type=click.Path(exists=True))
 @click.option(
     "--structure-only",
