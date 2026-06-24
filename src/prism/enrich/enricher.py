@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from tree_sitter import Query, QueryCursor
+from tree_sitter import QueryCursor
 
 from prism.engine.languages import (
     extension_to_language,
@@ -135,10 +135,8 @@ def _find_enclosing_function(node: Any, data: bytes) -> str | None:
 def _find_function_at_line(root: Any, data: bytes, line: int) -> dict[str, Any] | None:
     """Find the function or method that contains a given 1-indexed line number."""
     target = line - 1
-    from tree_sitter import Query, QueryCursor
 
     # Use a broad query that captures any function-like construct
-    lang = None
     # We need the language object for the query. Use the root's tree to find it.
     # Actually, let's just walk the tree for this — simpler and language-agnostic.
     cursor = root.walk()
@@ -212,9 +210,7 @@ def enrich_by_line(
 
         func_name = func_info.get("function", "")
         if func_name and project_files:
-            callers = find_cross_file_callers(
-                func_name, target_file, project_files, _cache=_cache
-            )
+            callers = find_cross_file_callers(func_name, target_file, project_files, _cache=_cache)
             ctx["callers"] = callers
 
     return finding
@@ -242,9 +238,7 @@ def enrich_measurements(
     for item in items:
         func_name = item.get("function", "")
         if func_name:
-            callers = find_cross_file_callers(
-                func_name, target_file, project_files, _cache=cache
-            )
+            callers = find_cross_file_callers(func_name, target_file, project_files, _cache=cache)
             if callers:
                 item.setdefault("context", {})["callers"] = callers
         enriched.append(item)
@@ -274,7 +268,7 @@ def _enrich_fast(
 
     # Single regex matching any function name
     sorted_names = sorted(func_names, key=len, reverse=True)
-    pattern = re.compile(r'\b(' + '|'.join(re.escape(n) for n in sorted_names) + r')\b')
+    pattern = re.compile(r"\b(" + "|".join(re.escape(n) for n in sorted_names) + r")\b")
 
     for fpath in project_files:
         if fpath == target_file:
@@ -286,15 +280,17 @@ def _enrich_fast(
 
         for m in pattern.finditer(text):
             name = m.group(1)
-            line = text[:m.start()].count("\n") + 1
+            line = text[: m.start()].count("\n") + 1
             key = (fpath, name, line)
             if key not in seen:
                 seen.add(key)
-                name_to_callers[name].append({
-                    "function": name,
-                    "file": fpath,
-                    "line": line,
-                })
+                name_to_callers[name].append(
+                    {
+                        "function": name,
+                        "file": fpath,
+                        "line": line,
+                    }
+                )
 
     for item in items:
         name = item.get("function", "")

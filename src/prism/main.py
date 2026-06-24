@@ -9,8 +9,8 @@ from pathlib import Path
 import click
 
 from prism import __version__
-from prism.engine.semgrep_runner import run_semgrep
 from prism.engine.languages import extension_to_language
+from prism.engine.semgrep_runner import run_semgrep
 from prism.engine.treerunner import run as treerunner_run
 from prism.engine.treerunner import run_project as treerunner_run_project
 from prism.enrich.enricher import discover_project_files, enrich_by_line, enrich_measurements
@@ -72,7 +72,7 @@ def _detect_project_language(files: list[str]) -> str:
             langs[lang] = langs.get(lang, 0) + 1
     if not langs:
         return "unknown"
-    return max(langs, key=langs.get)
+    return max(langs, key=lambda k: langs[k])
 
 
 def _build_project_output(root: str, structure_only: bool, include_community: bool) -> dict:
@@ -94,12 +94,16 @@ def _build_project_output(root: str, structure_only: bool, include_community: bo
 
     if not structure_only:
         for f in files:
-            file_measurements = [x for x in all_measurements if x.get("location", {}).get("file") == f]
+            file_measurements = [
+                x for x in all_measurements if x.get("location", {}).get("file") == f
+            ]
             other_files = [x for x in files if x != f]
             enrich_measurements(file_measurements, f, other_files)
     else:
         for f in files:
-            file_measurements = [x for x in all_measurements if x.get("location", {}).get("file") == f]
+            file_measurements = [
+                x for x in all_measurements if x.get("location", {}).get("file") == f
+            ]
             other_files = [x for x in files if x != f]
             enrich_measurements(file_measurements, f, other_files, fast=True)
 
@@ -108,7 +112,9 @@ def _build_project_output(root: str, structure_only: bool, include_community: bo
     if not structure_only:
         semgrep_cache: dict = {}
         for f in files:
-            raw = run_semgrep(f, prism_rules_dir=_PRISM_RULES_DIR, include_community=include_community)
+            raw = run_semgrep(
+                f, prism_rules_dir=_PRISM_RULES_DIR, include_community=include_community
+            )
             other_files = [x for x in files if x != f]
             for finding in raw:
                 finding = enrich_by_line(finding, f, other_files, _cache=semgrep_cache)

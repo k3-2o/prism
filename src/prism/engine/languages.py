@@ -16,11 +16,9 @@ even though the AST node types differ.
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from tree_sitter import Language, Parser, Query
-
 
 # ── Type aliases ────────────────────────────────────────────────────────
 
@@ -124,7 +122,8 @@ _register(
         """,
             "calls": """
             (call_expression function: (identifier) @name) @call
-            (call_expression function: (member_expression property: (property_identifier) @name)) @call
+            (call_expression function: (member_expression
+              property: (property_identifier) @name)) @call
         """,
             "imports": """
             (import_statement source: (string) @name)
@@ -156,7 +155,8 @@ _register(
         """,
             "calls": """
             (call_expression function: (identifier) @name) @call
-            (call_expression function: (member_expression property: (property_identifier) @name)) @call
+            (call_expression function: (member_expression
+              property: (property_identifier) @name)) @call
         """,
             "imports": """
             (import_statement source: (string) @name)
@@ -234,7 +234,10 @@ _register(
         "lang_attr": "language",
         "thresholds": {"parameter_count": 5, "nesting_depth": 4, "function_length": 50},
         "queries": {
-            "functions": "(method_declaration name: (identifier) @name parameters: (formal_parameters) @params) @func",
+            "functions": (
+                "(method_declaration name: (identifier) @name"
+                " parameters: (formal_parameters) @params) @func"
+            ),
             "calls": "(method_invocation name: (identifier) @name) @call",
             "imports": "(import_declaration (scoped_identifier (identifier) @name))",
         },
@@ -252,7 +255,9 @@ _register(
         "lang_attr": "language",
         "thresholds": {"parameter_count": 5, "nesting_depth": 4, "function_length": 40},
         "queries": {
-            "functions": "(method name: (identifier) @name parameters: (method_parameters) @params) @func",
+            "functions": (
+                "(method name: (identifier) @name parameters: (method_parameters) @params) @func"
+            ),
             "calls": "(call method: (identifier) @name) @call",
             "imports": "(call method: (identifier) @name)",
         },
@@ -270,7 +275,10 @@ _register(
         "lang_attr": "language_php",
         "thresholds": {"parameter_count": 5, "nesting_depth": 4, "function_length": 50},
         "queries": {
-            "functions": "(function_definition name: (name) @name parameters: (formal_parameters) @params) @func",
+            "functions": (
+                "(function_definition name: (name) @name"
+                " parameters: (formal_parameters) @params) @func"
+            ),
             "calls": "(function_call_expression function: (qualified_name (name) @name)) @call",
             "imports": "(namespace_use_clause (qualified_name (name) @name))",
         },
@@ -372,7 +380,9 @@ _register(
             "god_class_lines": 100,
         },
         "queries": {
-            "functions": "(function_declaration name: (identifier) @name (parameters) @params) @func",
+            "functions": (
+                "(function_declaration name: (identifier) @name (parameters) @params) @func"
+            ),
             "calls": "(call_expression (identifier) @name) @call",
             "imports": "(builtin_function (builtin_identifier) @name)",
         },
@@ -433,6 +443,7 @@ def get_queries(lang: str) -> dict[str, Query]:
             raise ValueError(f"Unknown language: {lang}")
         parser = get_parser(lang)
         lang_obj = parser.language
+        assert lang_obj is not None, f"Parser for {lang} returned None language"
         queries: dict[str, Query] = {}
         for qname, qstr in defn["queries"].items():
             queries[qname] = Query(lang_obj, qstr)

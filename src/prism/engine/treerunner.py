@@ -21,7 +21,6 @@ from prism.engine.languages import (
     supported_extensions,
 )
 
-
 # ── Code cache ───────────────────────────────────────────────────────────
 
 _CODE_CACHE: dict[int, bytes] = {}
@@ -116,8 +115,8 @@ def _count_parameters(params_node: Any, data: bytes, lang: str) -> int:
 def _make_measurement(
     metric: str,
     function: str,
-    value: int | None,
-    threshold: int | None,
+    value: int | float | None,
+    threshold: int | float | None,
     location: dict,
     **extra: Any,
 ) -> dict[str, Any]:
@@ -253,7 +252,13 @@ def measure_function_length(
 
         if length > max_lines:
             findings.append(
-                _make_measurement("function_length", func_name, length, max_lines, {"file": file_path, "line": line})
+                _make_measurement(
+                    "function_length",
+                    func_name,
+                    length,
+                    max_lines,
+                    {"file": file_path, "line": line},
+                )
             )
 
     return findings
@@ -288,7 +293,9 @@ def measure_dead_code(tree: Tree, data: bytes, file_path: str, lang: str) -> lis
         if name.startswith("__") and name.endswith("__"):
             continue  # Python dunders
         if name not in called:
-            findings.append(_make_measurement("dead_function", name, 0, None, {"file": file_path, "line": line}))
+            findings.append(
+                _make_measurement("dead_function", name, 0, None, {"file": file_path, "line": line})
+            )
 
     return findings
 
@@ -344,7 +351,12 @@ def measure_cyclic_imports(files: list[str], base_dir: str) -> list[dict[str, An
                 continue
             findings.append(
                 _make_measurement(
-                    "cyclic_import", node, len(cycle), 1, {"file": file_paths[node], "line": 1}, cycle=cycle
+                    "cyclic_import",
+                    node,
+                    len(cycle),
+                    1,
+                    {"file": file_paths[node], "line": 1},
+                    cycle=cycle,
                 )
             )
     return findings
@@ -422,7 +434,11 @@ def measure_cyclomatic_complexity(
         if complexity > max_complexity:
             findings.append(
                 _make_measurement(
-                    "cyclomatic_complexity", func_name, complexity, max_complexity, {"file": file_path, "line": line}
+                    "cyclomatic_complexity",
+                    func_name,
+                    complexity,
+                    max_complexity,
+                    {"file": file_path, "line": line},
                 )
             )
 
@@ -474,7 +490,9 @@ def measure_cognitive_complexity(
 
         if score > 15:
             findings.append(
-                _make_measurement("cognitive_complexity", func_name, score, 15, {"file": file_path, "line": line})
+                _make_measurement(
+                    "cognitive_complexity", func_name, score, 15, {"file": file_path, "line": line}
+                )
             )
 
     return findings
@@ -565,7 +583,10 @@ def measure_module_coupling(files: list[str]) -> list[dict[str, Any]]:
                     round(instability, 2),
                     0.8,
                     {"file": path, "line": 1},
-                    detail=f"Ce={outgoing}, Ca={incoming}, no outgoing deps — possibly dead abstraction",
+                    detail=(
+                        f"Ce={outgoing}, Ca={incoming}"
+                        " — no outgoing deps, possibly dead abstraction"
+                    ),
                 )
             )
 
@@ -586,14 +607,20 @@ def _fetch_git_head(file_path: str) -> bytes | None:
         rel_path = Path(file_path).resolve()
         git_root = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, timeout=5, cwd=rel_path.parent,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            cwd=rel_path.parent,
         ).stdout.strip()
         if not git_root:
             return None
         rel = rel_path.relative_to(Path(git_root))
         head_result = subprocess.run(
             ["git", "show", f"HEAD:{rel}"],
-            capture_output=True, text=True, timeout=5, cwd=rel_path.parent,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            cwd=rel_path.parent,
         )
         if head_result.returncode != 0:
             return None
@@ -602,9 +629,7 @@ def _fetch_git_head(file_path: str) -> bytes | None:
         return None
 
 
-def _parse_func_defs(
-    tree: Tree, data: bytes, lang: str
-) -> dict[str, tuple[int, int, int]]:
+def _parse_func_defs(tree: Tree, data: bytes, lang: str) -> dict[str, tuple[int, int, int]]:
     """Extract function names -> (line, param_count, estimated_cc)."""
     queries = get_queries(lang)
     funcs: dict[str, tuple[int, int, int]] = {}
@@ -640,7 +665,11 @@ def _compute_diff_changes(
         if name not in head:
             findings.append(
                 _make_measurement(
-                    "diff_function_added", name, 0, None, {"file": file_path, "line": line},
+                    "diff_function_added",
+                    name,
+                    0,
+                    None,
+                    {"file": file_path, "line": line},
                     detail=f"params={pc}, complexity={cc}",
                 )
             )
@@ -649,7 +678,11 @@ def _compute_diff_changes(
         if name not in current:
             findings.append(
                 _make_measurement(
-                    "diff_function_removed", name, 0, None, {"file": file_path, "line": line},
+                    "diff_function_removed",
+                    name,
+                    0,
+                    None,
+                    {"file": file_path, "line": line},
                     detail=f"params={pc}, complexity={cc}",
                 )
             )
@@ -665,7 +698,11 @@ def _compute_diff_changes(
         if changes:
             findings.append(
                 _make_measurement(
-                    "diff_function_changed", name, 0, None, {"file": file_path, "line": cur_line},
+                    "diff_function_changed",
+                    name,
+                    0,
+                    None,
+                    {"file": file_path, "line": cur_line},
                     detail=", ".join(changes),
                 )
             )
@@ -711,17 +748,6 @@ def _estimate_cc(func_node: Any) -> int:
     return 1 + counter[0]
 
 
-def _get_parser_for_file(path: str) -> tuple[Any, str]:
-    """Return (parser, language_name) for a file path."""
-    from prism.engine.languages import extension_to_language, get_parser
-
-    ext = Path(path).suffix.lower()
-    lang = extension_to_language(ext)
-    if not lang:
-        raise ValueError(f"Unsupported file type: {ext}")
-    return get_parser(lang), lang
-
-
 # ── Boolean expression complexity ────────────────────────────────────────
 
 
@@ -734,8 +760,6 @@ def measure_boolean_complexity(
     Threshold: >3 conditions in a single branch is hard to read.
     """
     queries = get_queries(lang)
-    thresholds = get_thresholds(lang)
-    max_conditions = thresholds.get("boolean_complexity", 3)
     bool_ops = set(LANGUAGES.get(lang, {}).get("boolean_operator_types", []))
 
     if not bool_ops:
