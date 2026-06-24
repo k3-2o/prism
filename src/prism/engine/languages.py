@@ -530,11 +530,6 @@ def get_ignore_names(lang: str) -> list[str]:
     return list(defn.get("ignore_names", []))
 
 
-def supported_languages() -> list[str]:
-    """Return list of all registered language names."""
-    return list(LANGUAGES.keys())
-
-
 def supported_extensions() -> list[str]:
     """Return list of all registered file extensions."""
     exts: list[str] = []
