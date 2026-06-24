@@ -881,6 +881,156 @@ def structural_diff(file_path: str) -> list[dict[str, Any]]:
     return _compute_diff_changes(current_funcs, head_funcs, file_path)
 
 
+def _fetch_git_version_at_commit(file_path: str, commit: str) -> bytes | None:
+    """Get the content of a file at a specific git commit."""
+    import subprocess
+
+    try:
+        rel_path = Path(file_path).resolve()
+        git_root = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            cwd=rel_path.parent,
+        ).stdout.strip()
+        if not git_root:
+            return None
+        rel = rel_path.relative_to(Path(git_root).resolve())
+        result = subprocess.run(
+            ["git", "show", f"{commit}:{rel}"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            cwd=Path(git_root).resolve(),
+        )
+        if result.returncode != 0:
+            return None
+        return result.stdout.encode("utf-8")
+    except (subprocess.TimeoutExpired, ValueError, FileNotFoundError):
+        return None
+
+
+def measure_churn_hotspots(
+    file_path: str,
+    num_commits: int = 10,
+    hotspot_threshold: float = 2.0,
+) -> list[dict[str, Any]]:
+    """Find functions that changed frequently AND have high complexity.
+
+    Analyzes the last N git commits, tracks which functions changed in each
+    commit, and computes hotspot = churn_rate * cyclomatic_complexity.
+
+    High hotspot scores indicate functions that are both complex AND
+    frequently modified — the highest-value refactoring targets.
+    """
+    import subprocess
+
+    try:
+        rel_path = Path(file_path).resolve()
+        git_root = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            cwd=rel_path.parent,
+        ).stdout.strip()
+        if not git_root:
+            return []
+        rel = rel_path.relative_to(Path(git_root).resolve())
+
+        # Get the last N commit hashes
+        log_result = subprocess.run(
+            ["git", "log", "--oneline", f"-{num_commits}", "--", str(rel)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            cwd=Path(git_root).resolve(),
+        )
+        if log_result.returncode != 0 or not log_result.stdout.strip():
+            return []
+
+        commits = [line.split()[0] for line in log_result.stdout.strip().split("\n")]
+    except (subprocess.TimeoutExpired, ValueError, FileNotFoundError):
+        return []
+
+    if not commits:
+        return []
+
+    # Get the current version to parse function defs and compute CC
+    try:
+        current_tree, current_data, lang = parse_file(file_path)
+    except ValueError:
+        return []
+    current_funcs = _parse_func_defs(current_tree, current_data, lang)
+
+    # Track which functions changed in each commit
+    churn_counts: dict[str, int] = {}  # func_name -> number of commits it changed in
+
+    # Use current version as the "previous" state for the first comparison
+    # We iterate from oldest to newest to track changes
+    prev_funcs = current_funcs
+
+    for commit in commits:
+        # Get the file at this commit
+        try:
+            parser = _get_parser_for_file(file_path)[0]
+        except ValueError:
+            continue
+
+        code = _fetch_git_version_at_commit(file_path, commit)
+        if code is None:
+            continue
+
+        try:
+            commit_tree = parser.parse(code)
+        except Exception:
+            continue
+
+        commit_funcs = _parse_func_defs(commit_tree, code, lang)
+
+        # Find functions that differ between this commit and the "previous" state
+        # (added, removed, or changed)
+        all_names = set(commit_funcs) | set(prev_funcs)
+        for name in all_names:
+            if name in commit_funcs and name not in prev_funcs:
+                churn_counts[name] = churn_counts.get(name, 0) + 1
+            elif name not in commit_funcs and name in prev_funcs:
+                churn_counts[name] = churn_counts.get(name, 0) + 1
+            elif name in commit_funcs and name in prev_funcs:
+                if commit_funcs[name] != prev_funcs[name]:
+                    churn_counts[name] = churn_counts.get(name, 0) + 1
+
+        prev_funcs = commit_funcs
+
+    total_commits = len(commits)
+    findings: list[dict[str, Any]] = []
+
+    for func_name, (line, pc, cc) in current_funcs.items():
+        churn_count = churn_counts.get(func_name, 0)
+        if churn_count == 0:
+            continue
+        churn_rate = churn_count / total_commits
+        hotspot = churn_rate * cc
+
+        if hotspot > hotspot_threshold:
+            findings.append(
+                _make_measurement(
+                    "churn_hotspot",
+                    func_name,
+                    round(hotspot, 2),
+                    hotspot_threshold,
+                    {"file": file_path, "line": line},
+                    detail=(
+                        f"churn={churn_count}/{total_commits}"
+                        f" ({round(churn_rate * 100)}%), CC={cc}, hotspot={round(hotspot, 2)}"
+                    ),
+                )
+            )
+
+    return findings
+
+
 def _estimate_cc(func_node: Any) -> int:
     """Quick cyclomatic complexity estimate for diff comparison."""
     decision_types = {
@@ -2296,6 +2446,7 @@ def run(file_path: str, project_files: list[str] | None = None) -> list[dict[str
     findings.extend(measure_unused_classes(tree, data, file_path, lang))
     findings.extend(measure_unused_variables(tree, data, file_path, lang))
     findings.extend(structural_diff(file_path))
+    findings.extend(measure_churn_hotspots(file_path))
 
     return findings
 
