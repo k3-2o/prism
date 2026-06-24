@@ -182,12 +182,15 @@ def measure_parameter_count(
 def measure_nesting_depth(
     tree: Tree, data: bytes, file_path: str, lang: str
 ) -> list[dict[str, Any]]:
-    """Find functions with nesting depth above language-specific threshold."""
+    """Find functions with nesting depth above language-specific threshold.
+
+    Uses AST walk of control structures (if/for/while/switch/try) instead of
+    indent heuristic. More accurate and language-aware.
+    """
     queries = get_queries(lang)
     thresholds = get_thresholds(lang)
     max_depth = thresholds["nesting_depth"]
-    text = data.decode("utf-8")
-    lines = text.split("\n")
+    decision_types = set(LANGUAGES.get(lang, {}).get("decision_types", []))
     findings: list[dict[str, Any]] = []
 
     for _pat_idx, captures in _get_matches(queries["functions"], tree.root_node):
@@ -202,31 +205,42 @@ def measure_nesting_depth(
         if not func_name or not func_node:
             continue
 
-        start_line = func_node.start_point[0]
-        end_line = func_node.end_point[0]
-        line = start_line + 1
+        line = func_node.start_point[0] + 1
 
-        max_depth = 0
-        for i in range(start_line, min(end_line + 1, len(lines))):
-            raw = lines[i]
-            if raw.strip() and not raw.strip().startswith(("#", "//", "/*")):
-                indent = len(raw) - len(raw.lstrip())
-                depth = indent // 4
-                if depth > max_depth:
-                    max_depth = depth
+        # Walk the AST counting control structure nesting depth
+        max_nest = _compute_ast_nesting(func_node, decision_types, 0)
 
-        if max_depth > thresholds["nesting_depth"]:
+        if max_nest > max_depth:
             findings.append(
                 _make_measurement(
                     "nesting_depth",
                     func_name,
+                    max_nest,
                     max_depth,
-                    thresholds["nesting_depth"],
                     {"file": file_path, "line": line},
                 )
             )
 
     return findings
+
+
+def _compute_ast_nesting(node: Any, decision_types: set[str], depth: int) -> int:
+    """Walk AST recursively, tracking max nesting depth of control structures.
+
+    A control structure (if/for/while/switch/try) increments depth for its
+    children. Non-control nodes pass depth unchanged.
+    """
+    current_depth = depth
+    if node.type in decision_types:
+        current_depth = depth + 1
+
+    max_child_depth = current_depth
+    for child in node.children:
+        child_depth = _compute_ast_nesting(child, decision_types, current_depth)
+        if child_depth > max_child_depth:
+            max_child_depth = child_depth
+
+    return max_child_depth
 
 
 def measure_function_length(
@@ -1201,6 +1215,123 @@ def measure_visibility_ratio(
     return findings
 
 
+# ── NLOC (source lines of code) ──────────────────────────────────────────
+
+
+def measure_nloc(tree: Tree, data: bytes, file_path: str, lang: str) -> list[dict[str, Any]]:
+    """Count non-blank, non-comment, non-import source lines of code.
+
+    Returns a single measurement with the total NLOC for the file.
+    Uses tree-sitter to identify comment and import nodes for accurate
+    counting across languages.
+    """
+    queries = get_queries(lang)
+
+    # Collect line ranges of comments
+    comment_lines: set[int] = set()
+    _collect_comment_lines(tree.root_node, data, comment_lines)
+
+    # Collect line ranges of imports
+    import_lines: set[int] = set()
+    for node in _get_captures(queries["imports"], tree.root_node).get("name", []):
+        import_lines.add(node.start_point[0])
+
+    lines = data.decode("utf-8").split("\n")
+    nloc = 0
+    for i, line in enumerate(lines):
+        if i in comment_lines or i in import_lines:
+            continue
+        stripped = line.strip()
+        if stripped and not stripped.startswith(("#", "//", "/*", "*", "--")):
+            nloc += 1
+
+    return [
+        _make_measurement(
+            "nloc",
+            Path(file_path).stem,
+            nloc,
+            None,
+            {"file": file_path, "line": 1},
+        )
+    ]
+
+
+def _collect_comment_lines(node: Any, data: bytes, comment_lines: set[int]) -> None:
+    """Walk AST and collect line numbers of all comment nodes."""
+    if node.type == "comment":
+        for line_no in range(node.start_point[0], node.end_point[0] + 1):
+            comment_lines.add(line_no)
+    for child in node.children:
+        _collect_comment_lines(child, data, comment_lines)
+
+
+# ── Maintainability Index ───────────────────────────────────────────────
+
+
+def measure_maintainability_index(
+    tree: Tree, data: bytes, file_path: str, lang: str
+) -> list[dict[str, Any]]:
+    """Compute Maintainability Index per function.
+
+    MI = max(0, 100 - (CC * 3 + nesting_depth * 5 + param_count * 2 + func_length / 10))
+
+    Threshold: < 40 = "needs attention", < 20 = "hard to maintain"
+    Uses existing decision_types and thresholds from the language registry.
+    """
+    queries = get_queries(lang)
+    decision_types = set(LANGUAGES.get(lang, {}).get("decision_types", []))
+    findings: list[dict[str, Any]] = []
+
+    for _pat_idx, captures in _get_matches(queries["functions"], tree.root_node):
+        func_name = ""
+        func_node = None
+        params_node = None
+        for name, nodes in captures.items():
+            if name == "name" and nodes:
+                func_name = _text(data, nodes[0])
+            elif name == "func" and nodes:
+                func_node = nodes[0]
+            elif name == "params" and nodes:
+                params_node = nodes[0]
+
+        if not func_name or not func_node:
+            continue
+
+        # Compute cyclomatic complexity
+        cc = 1
+        counter: list[int] = [0]
+        _walk_and_count(func_node, decision_types, counter)
+        cc += counter[0]
+
+        # Compute nesting depth (AST-based)
+        nesting = _compute_ast_nesting(func_node, decision_types, 0)
+
+        # Count parameters
+        param_count = _count_parameters(params_node, data, lang) if params_node else 0
+
+        # Compute function length
+        func_length = func_node.end_point[0] - func_node.start_point[0] + 1
+
+        # Maintainability Index (simplified, no Halstead)
+        mi = 100 - (cc * 3 + nesting * 5 + param_count * 2 + func_length / 10)
+        mi = max(0, round(mi, 1))
+
+        line = func_node.start_point[0] + 1
+        if mi < 40:
+            findings.append(
+                _make_measurement(
+                    "maintainability_index",
+                    func_name,
+                    mi,
+                    40,
+                    {"file": file_path, "line": line},
+                    detail=f"CC={cc}, nest={nesting}, params={param_count}, len={func_length}",
+                )
+            )
+
+    return findings
+
+
 # ── Import depth ─────────────────────────────────────────────────────────
 
 
@@ -1886,6 +2017,8 @@ def run(file_path: str, project_files: list[str] | None = None) -> list[dict[str
     findings.extend(measure_god_class(tree, data, file_path, lang))
     findings.extend(measure_error_handling(tree, data, file_path, lang))
     findings.extend(measure_visibility_ratio(tree, data, file_path, lang))
+    findings.extend(measure_nloc(tree, data, file_path, lang))
+    findings.extend(measure_maintainability_index(tree, data, file_path, lang))
     findings.extend(measure_import_depth(tree, data, file_path, lang))
     findings.extend(measure_code_clones(tree, data, file_path, lang))
     findings.extend(measure_function_purity(tree, data, file_path, lang))
@@ -1897,8 +2030,12 @@ def run(file_path: str, project_files: list[str] | None = None) -> list[dict[str
     return findings
 
 
-def run_project(files: list[str]) -> list[dict[str, Any]]:
-    """Run structural measurements across a project, including cyclic imports and coupling."""
+def run_project(files: list[str]) -> dict[str, Any]:
+    """Run structural measurements across a project, including cyclic imports and coupling.
+
+    Returns {"measurements": [...], "meta": {...}} where meta contains project-level
+    aggregation (total files, NLOC, avg complexity, language breakdown).
+    """
     findings: list[dict[str, Any]] = []
     for f in files:
         try:
@@ -1907,4 +2044,45 @@ def run_project(files: list[str]) -> list[dict[str, Any]]:
             continue  # Skip unsupported files
     findings.extend(measure_cyclic_imports(files, ""))
     findings.extend(measure_module_coupling(files))
-    return findings
+
+    # Compute project-level meta
+    nloc_values = [m["value"] for m in findings if m["metric"] == "nloc" and m["value"] is not None]
+    cc_values = [
+        m["value"]
+        for m in findings
+        if m["metric"] == "cyclomatic_complexity" and m["value"] is not None
+    ]
+    cog_values = [
+        m["value"]
+        for m in findings
+        if m["metric"] == "cognitive_complexity" and m["value"] is not None
+    ]
+    nest_values = [
+        m["value"] for m in findings if m["metric"] == "nesting_depth" and m["value"] is not None
+    ]
+
+    total_nloc = sum(nloc_values) if nloc_values else 0
+    avg_cc = round(sum(cc_values) / len(cc_values), 1) if cc_values else 0
+    avg_cog = round(sum(cog_values) / len(cog_values), 1) if cog_values else 0
+    max_nest = max(nest_values) if nest_values else 0
+
+    # Language breakdown
+    from collections import Counter
+
+    lang_count: Counter = Counter()
+    for f in files:
+        ext = Path(f).suffix.lower()
+        lang = extension_to_language(ext)
+        if lang:
+            lang_count[lang] += 1
+
+    meta = {
+        "total_files": len(files),
+        "total_nloc": total_nloc,
+        "avg_cyclomatic": avg_cc,
+        "avg_cognitive": avg_cog,
+        "max_nesting": max_nest,
+        "languages": dict(lang_count.most_common()),
+    }
+
+    return {"measurements": findings, "meta": meta}

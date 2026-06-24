@@ -101,7 +101,9 @@ def _build_project_output(
             "semgrep_curated": [],
         }
 
-    all_measurements = treerunner_run_project(files)
+    result = treerunner_run_project(files)
+    all_measurements = result["measurements"]
+    project_meta = result["meta"]
 
     if not structure_only:
         for f in files:
@@ -139,6 +141,7 @@ def _build_project_output(
         "mode": "structure-only" if structure_only else "full",
         "measurements_count": len(all_measurements),
         "measurements": all_measurements,
+        "meta": project_meta,
         "semgrep_community": all_community,
         "semgrep_curated": all_curated,
     }
