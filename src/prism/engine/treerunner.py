@@ -390,29 +390,85 @@ def measure_dead_code(tree: Tree, data: bytes, file_path: str, lang: str) -> lis
 # ── Cyclic imports (cross-file) ──────────────────────────────────────────
 
 
-def _extract_module_imports(data: bytes, lang: str) -> set[str]:
-    """Extract local module names imported by this file."""
+def _extract_project_imports(
+    data: bytes, lang: str, file_path: str, project_files: set[str]
+) -> set[str]:
+    """Extract local module names imported by this file, resolved to actual file paths."""
     try:
         parser = get_parser(lang)
     except ValueError:
         return set()
     tree = parser.parse(data)
     queries = get_queries(lang)
-    imports: set[str] = set()
+    resolved: set[str] = set()
+    project_root = str(_find_project_root(file_path))
+
     for node in _get_captures(queries["imports"], tree.root_node).get("name", []):
         import_text = _text(data, node)
-        # Clean up quotes and path separators
         import_text = import_text.strip("\"'")
-        parts = import_text.replace("/", ".").replace("\\", ".").split(".")
-        if len(parts) >= 1:
-            imports.add(parts[0])
-    return imports
+
+        is_from = "." in import_text and not import_text.startswith(".")
+        resolved_path = _resolve_as_project_import(
+            import_text, file_path, project_root, is_from, project_files, lang
+        )
+        if resolved_path:
+            resolved.add(resolved_path)
+
+    return resolved
+
+
+def _resolve_as_project_import(
+    import_text: str,
+    from_file: str,
+    project_root: str,
+    is_from: bool,
+    project_files: set[str],
+    lang: str,
+) -> str | None:
+    """Try to resolve an import to a project file path."""
+    if lang == "python":
+        from prism.enrich.resolver import resolve_python_import
+
+        resolved = resolve_python_import(import_text, from_file, project_root, is_from)
+        if resolved and resolved in project_files:
+            return resolved
+        # Fallback: try dotted path as filesystem path
+        parts = import_text.split(".")
+        for i in range(len(parts), 0, -1):
+            candidate = str(Path(project_root).joinpath(*parts[:i]).with_suffix(".py"))
+            if candidate in project_files:
+                return candidate
+            init_candidate = str(Path(project_root).joinpath(*parts[:i], "__init__.py"))
+            if init_candidate in project_files:
+                return init_candidate
+    else:
+        path_str = import_text.replace("/", ".").replace("\\", ".")
+        parts = path_str.split(".")
+        for f in project_files:
+            f_stem = Path(f).stem
+            if parts[0] == f_stem:
+                return f
+    return None
+
+
+def _find_project_root(file_path: str) -> Path:
+    """Find the project root by looking for .git or common markers."""
+    p = Path(file_path).resolve()
+    for parent in [p] + list(p.parents):
+        if (parent / ".git").exists():
+            return parent
+        if (parent / "pyproject.toml").exists():
+            return parent
+        if (parent / "requirements.txt").exists():
+            return parent
+    return p.parent
 
 
 def measure_cyclic_imports(files: list[str], base_dir: str) -> list[dict[str, Any]]:
     """Detect cyclic import chains across files in the given list."""
     import_graph: dict[str, set[str]] = {}
     file_paths: dict[str, str] = {}
+    project_files_set = {str(Path(f).resolve()) for f in files}
 
     for fpath in files:
         p = Path(fpath)
@@ -420,30 +476,36 @@ def measure_cyclic_imports(files: list[str], base_dir: str) -> list[dict[str, An
             data = p.read_bytes()
         except Exception:
             continue
-        module_name = p.stem
-        file_paths[module_name] = str(p)
+        module_key = str(p.resolve())
+        file_paths[module_key] = str(p)
         lang = extension_to_language(p.suffix.lower()) or "python"
-        imports = _extract_module_imports(data, lang)
-        # Filter to only modules that exist in our project
-        project_stems = {Path(f).stem for f in files}
-        imports = {m for m in imports if m in project_stems}
-        import_graph[module_name] = imports
+        imports = _extract_project_imports(data, lang, str(p), project_files_set)
+        import_graph[module_key] = imports
 
     cycles = _find_cycles(import_graph)
 
     findings: list[dict[str, Any]] = []
     for cycle in cycles:
+        cycle_path = []
+        for node in cycle:
+            try:
+                rel = Path(node).relative_to(Path.cwd())
+                cycle_path.append(str(rel))
+            except ValueError:
+                cycle_path.append(Path(node).stem)
+
         for node in cycle:
             if node not in file_paths:
                 continue
             findings.append(
                 _make_measurement(
                     "cyclic_import",
-                    node,
+                    Path(node).stem,
                     len(cycle),
                     1,
                     {"file": file_paths[node], "line": 1},
-                    cycle=cycle,
+                    cycle=cycle_path,
+                    detail=f"{' → '.join(cycle_path)} ({len(cycle)} modules)",
                 )
             )
     return findings
@@ -613,9 +675,9 @@ def measure_module_coupling(files: list[str]) -> list[dict[str, Any]]:
     Reports modules with instability > 0.8 (too unstable — fragile)
     or < 0.2 and Ce > 0 (too stable — possibly dead weight).
     """
-    # Build import graph: module_name -> set of imported project module names
     imports_from: dict[str, set[str]] = {}
     module_paths: dict[str, str] = {}
+    project_files_set = {str(Path(f).resolve()) for f in files}
 
     for fpath in files:
         p = Path(fpath)
@@ -623,17 +685,16 @@ def measure_module_coupling(files: list[str]) -> list[dict[str, Any]]:
             data = p.read_bytes()
         except Exception:
             continue
-        module_name = p.stem
-        module_paths[module_name] = str(fpath)
+        module_key = str(p.resolve())
+        module_paths[module_key] = str(fpath)
 
         ext = p.suffix.lower()
         lang = extension_to_language(ext)
         if not lang:
             continue
 
-        project_stems = {Path(f).stem for f in files}
-        imported = _extract_module_imports(data, lang)
-        imports_from[module_name] = {m for m in imported if m in project_stems and m != module_name}
+        imported = _extract_project_imports(data, lang, str(p), project_files_set)
+        imports_from[module_key] = {m for m in imported if m != module_key}
 
     # Compute Ca (incoming) for each module
     ca: dict[str, int] = {}
