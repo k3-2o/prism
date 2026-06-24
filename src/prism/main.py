@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+from collections import defaultdict
 from pathlib import Path
 
 import click
@@ -17,6 +18,142 @@ from prism.enrich.enricher import discover_project_files, enrich_measurements
 from prism.output.viz import render_dependency_graph, try_render_svg
 
 
+def _format_single_output(path: str, measurements: list[dict], config: dict | None = None) -> dict:
+    """Format measurements for a single file into the structured output."""
+    lang = _detect_language(path)
+    nloc = 0
+
+    findings: list[dict] = []
+    for m in measurements:
+        f = _condense_finding(m)
+        findings.append(f)
+        if m["metric"] == "nloc":
+            nloc = m.get("value", 0)
+
+    return {
+        "prism": {"version": __version__},
+        "project": {
+            "root": str(Path(path).resolve().parent),
+            "primary_language": lang,
+            "files_scanned": 1,
+            "total_nloc": nloc,
+        },
+        "summary": _build_summary(findings),
+        "files": {path: {"nloc": nloc, "language": lang, "findings": findings}},
+    }
+
+
+def _format_project_output(
+    root: str,
+    files: list[str],
+    all_measurements: list[dict],
+    project_meta: dict,
+    config: dict | None = None,
+    visualize: bool = False,
+    visualize_format: str = "dot",
+) -> dict:
+    """Format measurements for a project into the structured output."""
+    project_lang = _detect_project_language(files) if files else "unknown"
+
+    # Group measurements by file
+    by_file: dict[str, list[dict]] = defaultdict(list)
+    for m in all_measurements:
+        fpath = m.get("location", {}).get("file", "")
+        if fpath:
+            by_file[fpath].append(m)
+
+    # Build structured file entries
+    files_output: dict[str, dict] = {}
+    for fpath in sorted(by_file):
+        findings: list[dict] = []
+        file_nloc = 0
+        for m in by_file[fpath]:
+            f = _condense_finding(m)
+            findings.append(f)
+            if m["metric"] == "nloc":
+                file_nloc = m.get("value", 0)
+
+        ext = Path(fpath).suffix.lower()
+        file_lang = extension_to_language(ext) or "unknown"
+
+        files_output[fpath] = {
+            "nloc": file_nloc,
+            "language": file_lang,
+            "findings": sorted(findings, key=lambda x: (x.get("line", 1), x.get("metric", ""))),
+        }
+
+    output: dict = {
+        "prism": {"version": __version__},
+        "project": {
+            "root": root,
+            "primary_language": project_lang,
+            "files_scanned": project_meta.get("total_files", len(files)),
+            "total_nloc": project_meta.get("total_nloc", 0),
+            "languages": project_meta.get("languages", {}),
+        },
+        "summary": _build_summary(all_measurements),
+        "files": files_output,
+    }
+
+    if project_meta.get("import_graph"):
+        output["import_graph"] = project_meta["import_graph"]
+
+    if visualize:
+        _generate_visualization(files, all_measurements, root, output, visualize_format)
+
+    return output
+
+
+def _condense_finding(m: dict) -> dict:
+    """Condense a raw measurement into a compact finding dict.
+
+    Strips redundant fields (source, threshold) and nests caller info
+    with relative paths for readability.
+    """
+    finding: dict = {
+        "metric": m["metric"],
+        "function": m.get("function", ""),
+        "value": m.get("value"),
+        "line": m.get("location", {}).get("line", 1),
+    }
+
+    if m.get("confidence") is not None:
+        finding["confidence"] = m["confidence"]
+
+    ctx = m.get("context", {})
+    if ctx.get("detail"):
+        finding["detail"] = ctx["detail"]
+
+    callers = ctx.get("callers", [])
+    if callers:
+        clean_callers = []
+        for c in callers:
+            clean_callers.append(
+                {
+                    "function": c.get("function", ""),
+                    "file": c.get("file", ""),
+                    "line": c.get("line", 0),
+                }
+            )
+        finding["callers"] = clean_callers
+
+    if ctx.get("cycle"):
+        finding["cycle"] = ctx["cycle"]
+
+    return finding
+
+
+def _build_summary(measurements: list[dict]) -> dict:
+    """Build summary counts from raw measurements."""
+    from collections import Counter
+
+    by_metric = Counter(m["metric"] for m in measurements)
+    return {
+        "findings": len(measurements),
+        "by_metric": dict(by_metric.most_common()),
+    }
+
+
 def _build_output(
     path: str,
     config: dict | None = None,
@@ -25,52 +162,33 @@ def _build_output(
 ) -> dict:
     p = Path(path)
     if p.is_dir():
-        return _build_project_output(
-            str(p.resolve()),
-            config,
-            visualize=visualize,
-            visualize_format=visualize_format,
-        )
+        return _build_project_wrapper(str(p.resolve()), config, visualize, visualize_format)
 
     measurements = treerunner_run(path)
     project_files = discover_project_files(str(p.parent))
     measurements = enrich_measurements(measurements, path, project_files, fast=True)
 
-    return {
-        "version": __version__,
-        "file": path,
-        "language": _detect_language(path),
-        "measurements_count": len(measurements),
-        "measurements": measurements,
-    }
+    return _format_single_output(path, measurements, config)
 
 
-def _detect_project_language(files: list[str]) -> str:
-    """Detect the primary language of a project from its file extensions."""
-    langs: dict[str, int] = {}
-    for f in files:
-        ext = Path(f).suffix.lower()
-        lang = extension_to_language(ext)
-        if lang:
-            langs[lang] = langs.get(lang, 0) + 1
-    return max(langs, key=lambda k: langs[k]) if langs else "unknown"
-
-
-def _build_project_output(
+def _build_project_wrapper(
     root: str,
     config: dict | None = None,
     visualize: bool = False,
     visualize_format: str = "dot",
 ) -> dict:
     files = discover_project_files(root)
-    project_lang = _detect_project_language(files) if files else "unknown"
     if not files:
         return {
-            "version": __version__,
-            "file": root,
-            "language": project_lang,
-            "measurements_count": 0,
-            "measurements": [],
+            "prism": {"version": __version__},
+            "project": {
+                "root": root,
+                "primary_language": "unknown",
+                "files_scanned": 0,
+                "total_nloc": 0,
+            },
+            "summary": {"findings": 0, "by_metric": {}},
+            "files": {},
         }
 
     result = treerunner_run_project(files)
@@ -83,19 +201,19 @@ def _build_project_output(
         other_files = [x for x in files if x != f]
         enrich_measurements(file_measurements, f, other_files, fast=True)
 
-    output: dict = {
-        "version": __version__,
-        "file": root,
-        "language": project_lang,
-        "measurements_count": len(all_measurements),
-        "measurements": all_measurements,
-        "meta": project_meta,
-    }
+    return _format_project_output(
+        root, files, all_measurements, project_meta, config, visualize, visualize_format
+    )
 
-    if visualize:
-        _generate_visualization(files, all_measurements, root, output, visualize_format)
 
-    return output
+def _detect_project_language(files: list[str]) -> str:
+    langs: dict[str, int] = {}
+    for f in files:
+        ext = Path(f).suffix.lower()
+        lang = extension_to_language(ext)
+        if lang:
+            langs[lang] = langs.get(lang, 0) + 1
+    return max(langs, key=lambda k: langs[k]) if langs else "unknown"
 
 
 def _generate_visualization(
@@ -105,9 +223,7 @@ def _generate_visualization(
     output: dict,
     viz_format: str,
 ) -> None:
-    """Generate dependency graph visualization."""
-    meta = output.get("meta", {})
-    import_graph: dict[str, list[str]] = meta.get("import_graph", {})
+    import_graph: dict[str, list[str]] = output.get("import_graph", {})
 
     cycles: list[list[str]] = []
     for m in measurements:
@@ -117,12 +233,10 @@ def _generate_visualization(
                 cycles.append(cycle_path)
 
     file_labels: dict[str, str] = {}
-    for m in measurements:
-        if m.get("metric") == "nloc":
-            mod_name = m.get("function", "")
-            val = m.get("value", 0)
-            if mod_name:
-                file_labels[mod_name] = f"{mod_name} ({val} NLOC)"
+    file_section = output.get("files", {})
+    for fpath, info in file_section.items():
+        stem = Path(fpath).stem
+        file_labels[stem] = f"{stem} ({info.get('nloc', 0)} NLOC)"
 
     root_name = Path(root).name
     dot_path = f"{root_name}-deps.dot"
@@ -202,18 +316,17 @@ def cli(
             config.setdefault("project", {})["entry_points"] = list(entry_points)
 
         output = _build_output(path, config, visualize=visualize, visualize_format=visualize_format)
-        output["config"] = {
-            "entry_points": config.get("project", {}).get("entry_points", []),
-        }
+        output["prism"]["entry_points"] = config.get("project", {}).get("entry_points", [])
+
         click.echo(json.dumps(output, indent=2))
     except Exception as e:
         click.echo(
             json.dumps(
                 {
-                    "version": __version__,
-                    "file": path,
+                    "prism": {"version": __version__},
                     "status": "error",
                     "error": str(e),
+                    "file": path,
                 },
                 indent=2,
             ),

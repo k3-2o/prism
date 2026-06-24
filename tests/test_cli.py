@@ -13,12 +13,13 @@ class TestCLI:
 
     def test_output_has_version(self, tmp_path: Path):
         result = run_prism_on_file("def f(): pass\n", tmp_path)
-        assert "version" in result
-        assert "measurements" in result
-        assert isinstance(result["measurements"], list)
+        assert "prism" in result
+        assert "version" in result["prism"]
+        assert "files" in result
+        assert isinstance(result["files"], dict)
 
     def test_output_has_meta_for_project(self, tmp_path: Path):
-        """Running on a directory should include meta."""
+        """Running on a directory should include project info."""
         (tmp_path / "test.py").write_text("def f(): pass\n")
         import subprocess
 
@@ -30,10 +31,10 @@ class TestCLI:
             cwd=str(Path(__file__).resolve().parent.parent),
         )
         data = json.loads(result.stdout)
-        assert "meta" in data
-        assert "total_files" in data["meta"]
+        assert "project" in data
+        assert "files_scanned" in data["project"]
 
     def test_config_info_in_output(self, tmp_path: Path):
         result = run_prism_on_file("def f(): pass\n", tmp_path)
-        assert "config" in result
-        assert "entry_points" in result["config"]
+        assert "prism" in result
+        assert "entry_points" in result["prism"]

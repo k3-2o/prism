@@ -26,7 +26,7 @@ class TestStructuralClones:
         )
         # These are very different structurally — may or may not trigger
         # depending on similarity threshold. Just check it runs.
-        assert "measurements" in result
+        assert "files" in result
 
 
 class TestCrossFileTokenClones:

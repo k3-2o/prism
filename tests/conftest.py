@@ -29,13 +29,19 @@ def _run_prism(path: str) -> dict:
 
 
 def find_metrics(results: dict, metric: str) -> list[dict]:
-    """Find all measurements of a given metric type."""
-    return [m for m in results["measurements"] if m["metric"] == metric]
+    """Find all findings of a given metric type across all files."""
+    findings: list[dict] = []
+    for info in results.get("files", {}).values():
+        for f in info.get("findings", []):
+            if f["metric"] == metric:
+                findings.append(f)
+    return findings
 
 
 def has_metric_for_function(results: dict, metric: str, func_name: str) -> bool:
-    """Check if a function has a specific metric flagged."""
-    for m in results["measurements"]:
-        if m["metric"] == metric and m["function"] == func_name:
-            return True
+    """Check if a function has a specific metric finding."""
+    for info in results.get("files", {}).values():
+        for f in info.get("findings", []):
+            if f["metric"] == metric and f.get("function") == func_name:
+                return True
     return False

@@ -65,22 +65,22 @@ class TestUnusedVariables:
         result = run_prism_on_file("def f():\n    x = 5\n    return 1\n", tmp_path)
         m = find_metrics(result, "unused_variable")
         assert len(m) >= 1
-        assert any("x" in d.get("context", {}).get("detail", "") for d in m)
+        assert any("x" in d.get("detail", "") for d in m)
 
     def test_used_var_not_flagged(self, tmp_path: Path):
         result = run_prism_on_file("def f():\n    x = 5\n    return x\n", tmp_path)
         m = find_metrics(result, "unused_variable")
-        assert not any("x" in d.get("context", {}).get("detail", "") for d in m)
+        assert not any("x" in d.get("detail", "") for d in m)
 
     def test_underscore_skipped(self, tmp_path: Path):
         result = run_prism_on_file("def f():\n    _ = 5\n    return 1\n", tmp_path)
         m = find_metrics(result, "unused_variable")
-        assert not any("_" in d.get("context", {}).get("detail", "") for d in m)
+        assert not any("_" in d.get("detail", "") for d in m)
 
     def test_loop_var_unused(self, tmp_path: Path):
         result = run_prism_on_file("def f():\n    for i in range(3):\n        pass\n", tmp_path)
         m = find_metrics(result, "unused_variable")
-        assert any("i" in d.get("context", {}).get("detail", "") for d in m)
+        assert any("i" in d.get("detail", "") for d in m)
 
 
 class TestConfidenceLevels:
