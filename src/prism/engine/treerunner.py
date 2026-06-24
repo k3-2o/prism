@@ -11,6 +11,7 @@ from typing import Any
 
 from tree_sitter import QueryCursor, Tree
 
+from prism.config import get_whitelist, load_config
 from prism.engine.languages import (
     LANGUAGES,
     extension_to_language,
@@ -121,6 +122,7 @@ def _make_measurement(
     value: int | float | None,
     threshold: int | float | None,
     location: dict,
+    confidence: int | None = None,
     **extra: Any,
 ) -> dict[str, Any]:
     return {
@@ -130,6 +132,7 @@ def _make_measurement(
         "value": value,
         "threshold": threshold,
         "location": location,
+        "confidence": confidence,
         "context": {"callers": [], **extra},
     }
 
@@ -291,6 +294,14 @@ def measure_dead_code(tree: Tree, data: bytes, file_path: str, lang: str) -> lis
     queries = get_queries(lang)
     ignore_names = set(get_ignore_names(lang)) | set(get_entry_points(lang))
 
+    # Load whitelist from config to suppress false positives
+    try:
+        _cfg = load_config()
+        whitelist = set(get_whitelist(_cfg).keys())
+        ignore_names |= whitelist
+    except Exception:
+        pass
+
     defined: dict[str, int] = {}
     for _pat_idx, captures in _get_matches(queries["functions"], tree.root_node):
         func_name = ""
@@ -337,6 +348,7 @@ def measure_dead_code(tree: Tree, data: bytes, file_path: str, lang: str) -> lis
                         0,
                         None,
                         {"file": file_path, "line": line},
+                        confidence=60,
                     )
                 )
             else:
@@ -347,6 +359,7 @@ def measure_dead_code(tree: Tree, data: bytes, file_path: str, lang: str) -> lis
                         0,
                         None,
                         {"file": file_path, "line": line},
+                        confidence=70,
                     )
                 )
 
@@ -367,6 +380,7 @@ def measure_dead_code(tree: Tree, data: bytes, file_path: str, lang: str) -> lis
                         0,
                         None,
                         {"file": file_path, "line": line},
+                        confidence=60,
                     )
                 )
 
@@ -1690,6 +1704,7 @@ def measure_unreachable_code(
                     len(unreachable_lines),
                     None,
                     {"file": file_path, "line": line},
+                    confidence=100,
                     detail=(
                         f"{len(unreachable_lines)} unreachable at lines {unreachable_lines[:5]}"
                     ),
@@ -1811,6 +1826,7 @@ def measure_unused_imports(
                     0,
                     None,
                     {"file": file_path, "line": line},
+                    confidence=90,
                 )
             )
 
@@ -1996,10 +2012,130 @@ def measure_unused_classes(
                     0,
                     None,
                     {"file": file_path, "line": line},
+                    confidence=80,
                 )
             )
 
     return findings
+
+
+# ── Unused variables (scope-aware) ─────────────────────────────────────
+
+
+# Node types where the FIRST child is a variable definition (store).
+_STORE_PARENT_TYPES = frozenset(
+    {
+        "assignment",  # Python: x = ... (only first child is store)
+        "augmented_assignment",  # Python: x += ... (only first child is store)
+        "variable_declarator",  # JS/TS: let x = ... (name child only)
+        "for_statement",  # Python: for x in ... (first child only)
+        "for_in_statement",  # JS: for (x in ...)
+        "for_of_statement",  # JS: for (x of ...)
+    }
+)
+
+# Identifiers to always skip (builtins and common always-alive names)
+_ALIVE_NAMES = frozenset(
+    {
+        "_",
+        "self",
+        "cls",
+        "this",
+        "super",
+        "undefined",
+        "null",
+        "None",
+        "True",
+        "False",
+    }
+)
+
+
+def measure_unused_variables(
+    tree: Tree, data: bytes, file_path: str, lang: str
+) -> list[dict[str, Any]]:
+    """Detect local variables that are assigned but never read.
+
+    For each function scope, check every identifier. Only the FIRST
+    child of assignment-like nodes is a "store" (definition).
+    All other identifiers in the function are "reads" (references).
+
+    Reports identifiers that are stored but never read elsewhere.
+    """
+    queries = get_queries(lang)
+    findings: list[dict[str, Any]] = []
+
+    for _pat_idx, captures in _get_matches(queries["functions"], tree.root_node):
+        func_name = ""
+        func_node = None
+        for name, nodes in captures.items():
+            if name == "name" and nodes:
+                func_name = _text(data, nodes[0])
+            elif name == "func" and nodes:
+                func_node = nodes[0]
+        if not func_name or not func_node:
+            continue
+
+        defined: set[str] = set()  # identifiers in store position
+        seen: set[str] = set()  # identifiers appearing anywhere
+
+        _walk_var_usage(func_node, data, defined, seen)
+
+        # An identifier is "used" if it appears in non-store position
+        unused = defined - seen - _ALIVE_NAMES
+        unused.discard(func_name)
+
+        if unused:
+            for var_name in sorted(unused):
+                findings.append(
+                    _make_measurement(
+                        "unused_variable",
+                        func_name,
+                        0,
+                        None,
+                        {"file": file_path, "line": func_node.start_point[0] + 1},
+                        confidence=60,
+                        detail=f"variable '{var_name}' assigned but never read",
+                    )
+                )
+
+    return findings
+
+
+def _walk_var_usage(
+    node: Any,
+    data: bytes,
+    defined: set[str],
+    seen: set[str],
+) -> None:
+    """Walk AST. Track identifier positions.
+
+    An identifier is a DEFINITION (store) if its parent is in
+    _STORE_PARENT_TYPES AND it appears at the store index for that type.
+    Otherwise it's a REFERENCE (read).
+    """
+    if node.type == "identifier" and node.is_named:
+        name = _text(data, node)
+        parent = node.parent
+        is_store = False
+        if parent is not None and parent.type in _STORE_PARENT_TYPES:
+            siblings = list(parent.children)
+            try:
+                idx = siblings.index(node)
+            except ValueError:
+                idx = -1
+            # Per-type store index:
+            if parent.type == "for_statement":
+                is_store = idx == 1  # after "for" keyword
+            else:
+                is_store = idx == 0  # first child for assignment/declarator
+        if is_store:
+            defined.add(name)
+        elif name:
+            seen.add(name)
+
+    for child in node.children:
+        _walk_var_usage(child, data, defined, seen)
 
 
 def run(file_path: str, project_files: list[str] | None = None) -> list[dict[str, Any]]:
@@ -2025,6 +2161,7 @@ def run(file_path: str, project_files: list[str] | None = None) -> list[dict[str
     findings.extend(measure_unreachable_code(tree, data, file_path, lang))
     findings.extend(measure_unused_imports(tree, data, file_path, lang))
     findings.extend(measure_unused_classes(tree, data, file_path, lang))
+    findings.extend(measure_unused_variables(tree, data, file_path, lang))
     findings.extend(structural_diff(file_path))
 
     return findings
