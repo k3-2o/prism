@@ -1,131 +1,228 @@
 ---
 name: prism
-description: "Structural code analysis — measures cyclomatic complexity, nesting depth, function length, dead functions, cyclic imports, code clones, error handling coverage, parameter counts, and more across 12 languages. Use when: reviewing code quality before commit, auditing for structural issues, cross-checking your own analysis, quantifying complexity of flagged functions, or preparing a final review. Trigger words: analyze, audit, review, complexity, dead code, structural analysis, code quality, metrics."
+description: "Structural code analysis — measures cyclomatic complexity, cognitive complexity, nesting depth, function length, dead functions (cross-file), unused imports/variables/classes/exports, unreachable code, code clones (structural + token-based), error handling coverage, function purity (interprocedural), god classes, cyclic imports (full path), module instability, churn hotspots, maintainability index, and more across 12 languages. Supports --filter, --compact, --visualize, entry point awareness, confidence levels, import rule enforcement. Use when: reviewing code quality before commit, auditing for structural issues, cross-checking your own analysis, finding dead code, quantifying complexity, or preparing a final review. Trigger words: analyze, audit, review, complexity, dead code, structural analysis, code quality, metrics, prism."
 compatibility: "Requires `prism` CLI on PATH. Install from github.com/k3-2o/prism."
 ---
 
-# PRISM — Structural Code Analysis
+# PRISM — Structural Code Analysis (v0.3.0)
 
 ## Setup
-
-Check if prism is available:
 
 ```bash
 which prism
 ```
 
-If not found, ask the user: **"prism is not installed. Install it from github.com/k3-2o/prism?"**
-If they agree, clone and install:
-
+If not found:
 ```bash
 git clone https://github.com/k3-2o/prism ~/prism && cd ~/prism && uv tool install .
 ```
 
-Then verify:
+---
+
+## How to Use (Action Guide)
+
+### Single file — after an edit
 
 ```bash
-which prism
+prism path/to/file.py
+# ~1s, returns JSON grouped by file
 ```
 
-## Workflow
+### Full project — every 3-5 iterations
+
+```bash
+prism .
+# ~13s for a 14-file project, scales with import graph depth, not file count
+```
+
+### Focused — only what you care about
+
+```bash
+prism . --filter dead_function,unused_import,unreachable_code
+# Drops output from 454 findings to 87. Multiple metrics, comma-separated.
+```
+
+### Machine-readable — for scripts / CI
+
+```bash
+prism . --compact
+# One line per finding: file: f=func m=metric l=line c=confidence v=value d=detail
+```
+
+### Dependency graph
+
+```bash
+prism . --visualize                      # Produces PROJECT-deps.dot
+prism . --visualize --visualize-format svg  # Renders to SVG (requires graphviz)
+```
+
+### Entry points — mark functions as always-alive
+
+```bash
+prism . --entry-points main --entry-points handler
+# Or configure in .prism.toml:
+# [project]
+# entry_points = ["main", "handler"]
+```
+
+---
+
+## Reading the Output
+
+PRISM outputs JSON structured as:
+
+```json
+{
+  "prism": {"version": "0.3.0"},
+  "project": {"root": ".", "files_scanned": 14, "total_nloc": 3592, ...},
+  "summary": {"findings": 454, "by_metric": {"dead_function": 32, "code_clone": 112, ...}},
+  "files": {
+    "src/prism/main.py": {
+      "nloc": 263,
+      "language": "python",
+      "findings": [
+        {
+          "metric": "dead_function",
+          "function": "cli",
+          "line": 184,
+          "confidence": 70,
+          "detail": "no callers in any project file",
+          "callers": [{"function": "...", "file": "...", "line": 1}]
+        }
+      ]
+    }
+  },
+  "import_graph": {"main": ["config", "languages"]}
+}
+```
+
+Key points:
+- `summary.by_metric` gives an instant overview of what's flagged
+- `files` is grouped by file path — file name appears once, findings sorted by line number
+- `confidence` ranges from 60% (likely dead) to 100% (certain)
+- `detail` explains why the finding was flagged
+- `callers` shows cross-file callers (empty list = no callers found)
+- `import_graph` shows module dependencies for visualization
+
+---
+
+## What PRISM Finds
+
+### Dead Code (cross-file)
+| Metric | What | Confidence |
+|---|---|---|
+| `dead_function` | No callers in any project file (cross-file via module graph) | 70% |
+| `unused_export` | JS/TS export with no cross-file consumers | 60% |
+| `unused_import` | Imported name never referenced | 90% |
+| `unused_variable` | Local variable assigned but never read | 60% |
+| `unused_class` | Class defined but never referenced | 80% |
+| `unreachable_code` | Code after return/break/raise/throw | 100% |
+| `unused_file` | File not reachable from any entry point (BFS) | 80% |
+
+### Complexity
+| Metric | Threshold | Confidence |
+|---|---|---|
+| `cyclomatic_complexity` | > 10 | — |
+| `cognitive_complexity` | > 15 | — |
+| `boolean_complexity` | > 3 conditions in one if | — |
+| `nesting_depth` | > 4 (AST-based, not indent) | — |
+| `nloc` | Source lines of code (per file) | — |
+| `maintainability_index` | < 40 (100 − CC×3 − nest×5 − params×2 − len÷10) | — |
+
+### Architecture
+| Metric | What |
+|---|---|
+| `god_class` | Methods > 10, lines > 100, or deps > 6 |
+| `module_instability` | Ce/(Ca+Ce) > 0.8 (unstable) or < 0.2 (dead weight) |
+| `cyclic_import` | Full cycle path: A → B → C → A |
+| `import_rule_violation` | Custom may_not/may_only rules violated |
+
+### Risk
+| Metric | What |
+|---|---|
+| `error_handling_coverage` | Ratio of risky calls that are try-guarded (< 80% flagged). 50+ risky call patterns per language |
+| `function_impurity` | Module var mutation, param mutation, impure calls. Interprocedural (follows call graph) |
+
+### Clones
+| Metric | What |
+|---|---|
+| `code_clone` | AST structural + token-based, in-file + cross-file |
+
+### Change
+| Metric | What |
+|---|---|
+| `churn_hotspot` | Complexity × commit frequency (> 2.0 flagged) |
+| `diff_function_added/removed/changed` | Functions added/removed/changed vs git HEAD |
+
+---
+
+## Config (.prism.toml)
+
+```toml
+[project]
+entry_points = ["main", "handler"]
+
+[dead_code]
+whitelist = { "register_routes" = "Called by framework" }
+
+[import_rules]
+"no-feature-to-feature" = { pattern = "features/*", may_not = ["features/*"], severity = "error" }
+"core-isolation" = { pattern = "core/*", may_only = ["core/*"], severity = "warning" }
+```
+
+---
+
+## The Adversarial Review Workflow
 
 ### Step 1: Run PRISM
 
-Choose speed based on context:
+```bash
+prism . --filter dead_function,unused_import,unreachable_code,unused_variable
+```
 
-| Situation | Command | Speed |
-|---|---|---|
-| Quick check after an edit | `prism --structure-only <file>` | ~0.5s |
-| Every 3-5 iterations | `prism <file>` or `prism <dir>` | ~10s |
-| Final audit before commit | `prism --community <dir>` | ~50s |
+### Step 2: Read the flagged code
 
-Default to `--structure-only`. Use `--community` only for final reviews.
+For every finding, read the actual file. PRISM gives numbers, not code.
 
-### Step 2: Read the Output
+- **Dead function** — is it truly dead, or is it called dynamically (getattr, reflection, framework)?
+- **Unused import** — is it used in type annotations only? (Python: `TYPE_CHECKING` blocks)
+- **Unreachable code** — is the return/break/raise intentional and the dead code leftover?
+- **Unused variable** — is it assigned for side effects? Is it a tuple unpack?
 
-PRISM outputs JSON. Look for:
+### Step 3: Adversarial review
 
-- **Metrics exceeding thresholds** (cognitive complexity > 15, cyclomatic > 10, function length > 60, nesting > 4)
-- **Dead functions** — zero callers within the analyzed scope
-- **Code clones** — similar code blocks (similarity > 0.8)
-- **Cyclic imports** — modules that import each other
-- **Error handling gaps** — functions with unguarded risky calls
+Read beyond the flags. PRISM measures structure, not correctness. Look for:
 
-Each measurement includes the function name, location, current value, threshold, and cross-file callers.
+- Logical correctness — wrong operators, off-by-one, inverted conditions
+- Missing edge cases — null/empty inputs, boundary values, concurrent access
+- API misuse — wrong function called, incorrect arguments, error swallowing
+- Architecture breaks — layering violations, wrong responsibility, leaky abstractions
+- Security — unvalidated input, sensitive data exposure, missing checks
+- Readability — misleading names, dead comments, unnecessary complexity
 
-### Step 3: Read the Flagged Code Yourself
+### Step 4: Decide
 
-PRISM gives you numbers, not code. For every flagged measurement, read the file:
+For each finding:
 
-- **Complexity flags** — is the function genuinely hard to follow, or is it a state machine that needs the branches?
-- **Dead function flags** — is it truly dead (no callers), or is it an entry point (main(), CLI command, API handler)?
-- **Code clones** — is it a natural pattern (getter/setter pairs) or actual duplication?
-- **Error handling** — PRISM counts try/except coverage but doesn't know if the *right* exception is caught
+| Decision | When |
+|---|---|
+| ✅ **Leave it** | Context justifies it (state machine with high CC, framework entry point) |
+| 🔨 **Fix it** | Genuine issue (dead legacy function, cyclic import, clone, logic bug) |
+| 🔨 **Remove it** | Truly dead code with no future use |
 
-### Step 4: Adversarial Review
+### Step 5: Structure your response
 
-Read the code with an adversarial mindset. PRISM measures structure — it cannot
-judge whether the code is *correct*. For every file that was scanned, read beyond
-the flags and look for anything that feels wrong.
+1. What PRISM found — flagged measurements worth mentioning
+2. What you saw reading the code — your own assessment
+3. Adversarial findings — issues PRISM can't detect
+4. Decision per finding — ✅ / 🔨 / 🔨
+5. What you're doing — actual changes
 
-PRISM's blind spots include (but are not limited to):
+---
 
-- **Logical correctness** — wrong operators, inverted conditions, off-by-one, incorrect assumptions, invariant violations, contradictions
-- **Missing edge cases** — null/empty inputs, boundary values, concurrent access, error paths not considered
-- **API misuse** — wrong function called, incorrect arguments, missing arguments, wrong return type assumed, error swallowing
-- **Architecture / design** — layering breaks, misplaced responsibility, leaky abstractions, over-engineering, inconsistent patterns
-- **Security / safety** — unvalidated user input, sensitive data exposure, missing auth checks, unsafe defaults
-- **Data flow** — values passed incorrectly across call boundaries, forgotten state transitions, dropped return values
-- **Readability / intention** — misleading names, dead comments, commented code, unclear control flow, unnecessary complexity
+## When to Skip PRISM
 
-This list is not exhaustive. Treat it as a starting point. The goal is to find
-what PRISM cannot, not to check items off a list.
-
-**Do not decide yet.** Simply note each finding. The adversarial review is
-observation, not judgment. Decisions happen in Step 5 when PRISM flags and
-adversarial findings are weighed together.
-
-### Step 5: Decide What to Act On
-
-For each flag and each adversarial finding, make a decision:
-
-- **✅ Leave it** — if context justifies the measurement (dataclass with 9 params, state machine with high complexity)
-- **🔨 Fix it** — if the finding reveals a genuine issue (dead legacy function, cyclic import, code clone, missing edge case, logic bug)
-- **🔨 Remove it** — if it's truly dead code with no future use
-
-### Step 6: Structure Your Response
-
-Present findings in this order:
-
-1. **What PRISM found** — the flagged measurements worth mentioning
-2. **What you saw when you read the code** — your own reading of each flagged area
-3. **What your adversarial review found** — issues PRISM cannot detect (logic gaps, edge cases, API misuse, architecture violations)
-4. **What you decided** — per flag and adversarial finding: ✅ leave, 🔨 fix, or 🔨 remove
-5. **What you're doing** — actual changes or next steps
-
-## When to Skip
-
-Do not use PRISM when:
-- The codebase is not one of: Python, JS, TS, Go, Rust, Java, Ruby, PHP, C, C++, HCL, Zig
-- You need logical correctness analysis (PRISM cannot evaluate whether code does the right thing)
-- You need a security audit (PRISM has no security domain knowledge)
-- The file is under 50 lines where you can see everything yourself
-- Speed matters and you're already confident in the code quality
-
-## Custom Semgrep Rules
-
-Add project-specific Semgrep YAML rules to `~/.prism/rules/`. PRISM loads them automatically on the next scan. Useful for catching project-specific anti-patterns.
-
-## Metrics Reference
-
-PRISM measures 16 metrics. Move detailed docs to reference files if needed, but here are the key thresholds:
-
-| Metric | Threshold | What it means |
-|---|---|---|
-| `function_length` | > 60 lines | Function may be doing too much |
-| `cyclomatic_complexity` | > 10 | Too many decision paths |
-| `cognitive_complexity` | > 15 | Hard to follow mentally |
-| `nesting_depth` | > 4 | Too many nested control structures |
-| `parameter_count` | > 6 | Too many arguments |
-| `code_clone` | > 0.8 similarity | Likely duplicated code |
-| `boolean_complexity` | > 3 | Complex boolean expression |
+- Codebase is not one of the 12 supported languages
+- File is under 50 lines (just read it)
+- You need logical correctness analysis (PRISM measures structure)
+- You need a full security audit (use bandit, gosec, semgrep separately)
