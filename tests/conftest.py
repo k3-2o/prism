@@ -19,7 +19,7 @@ def _run_prism(path: str) -> dict:
     import subprocess
 
     result = subprocess.run(
-        ["uv", "run", "prism", "--structure-only", path],
+        ["uv", "run", "prism", path],
         capture_output=True,
         text=True,
         timeout=30,

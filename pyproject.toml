@@ -1,6 +1,6 @@
 [project]
 name = "prism"
-version = "0.2.0"
+version = "0.3.0"
 description = "Structural code analysis for AI agent loops"
 readme = "README.md"
 authors = [
@@ -9,7 +9,6 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "click>=8.1",
-    "semgrep>=1.121.0",
     "setuptools<70",
     "tree-sitter-javascript>=0.25.0",
     "tree-sitter>=0.24",

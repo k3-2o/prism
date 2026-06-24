@@ -1,9 +1,0 @@
-rules:
-  - id: prism.dev-tooling.print-in-library
-    pattern: |
-      print(...)
-    message: >
-      Use logging instead of print() for non-script code.
-      print() is appropriate for CLI entry points but not library or production code.
-    languages: [python]
-    severity: WARNING

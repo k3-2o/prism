@@ -1,9 +1,0 @@
-rules:
-  - id: prism.correctness.unused-shutil-return
-    pattern: |
-      shutil.rmtree(...)
-    message: >
-      shutil.rmtree() can raise PermissionError or OSError.
-      Consider wrapping in try/except or checking the return value.
-    languages: [python]
-    severity: WARNING

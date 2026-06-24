@@ -23,7 +23,7 @@ class TestCLI:
         import subprocess
 
         result = subprocess.run(
-            ["uv", "run", "prism", "--structure-only", str(tmp_path)],
+            ["uv", "run", "prism", str(tmp_path)],
             capture_output=True,
             text=True,
             timeout=30,

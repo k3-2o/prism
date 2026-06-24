@@ -1,6 +1,6 @@
 # PRISM — Structural Code Analysis for AI Agent Loops
 
-**Version:** 0.1.0  
+**Version:** 0.3.0  
 **Status:** Working prototype, validated, ready for agent integration  
 **Language:** Python 3.12+ (CLI) + TypeScript (pi extension)  
 **Package Manager:** uv (Astral)  

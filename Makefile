@@ -24,7 +24,7 @@ types:
 # ── Security ────────────────────────────────────────────────────────────
 
 security:
-	uv run bandit -r src/ -x src/prism/rules/
+	uv run bandit -r src/
 
 # ── Full check (fmt → lint → types) ────────────────────────────────────
 # security is separate — pre-existing bandit issues are all Low severity
@@ -66,7 +66,7 @@ install-local: build
 # ── Self-audit ──────────────────────────────────────────────────────────
 
 audit:
-	uv run prism . --structure-only
+	uv run prism .
 
 audit-full:
 	uv run prism .
