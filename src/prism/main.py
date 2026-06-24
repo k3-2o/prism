@@ -9,6 +9,7 @@ from pathlib import Path
 import click
 
 from prism import __version__
+from prism.config import _deep_merge, load_config
 from prism.engine.languages import extension_to_language
 from prism.engine.semgrep_runner import run_semgrep
 from prism.engine.treerunner import run as treerunner_run
@@ -19,10 +20,15 @@ from prism.enrich.enricher import discover_project_files, enrich_by_line, enrich
 _PRISM_RULES_DIR = str(Path(__file__).resolve().parent / "rules")
 
 
-def _build_output(path: str, structure_only: bool, include_community: bool) -> dict:
+def _build_output(
+    path: str,
+    structure_only: bool,
+    include_community: bool,
+    config: dict | None = None,
+) -> dict:
     p = Path(path)
     if p.is_dir():
-        return _build_project_output(str(p.resolve()), structure_only, include_community)
+        return _build_project_output(str(p.resolve()), structure_only, include_community, config)
 
     measurements = treerunner_run(path)
     project_files = discover_project_files(str(p.parent))
@@ -75,7 +81,12 @@ def _detect_project_language(files: list[str]) -> str:
     return max(langs, key=lambda k: langs[k])
 
 
-def _build_project_output(root: str, structure_only: bool, include_community: bool) -> dict:
+def _build_project_output(
+    root: str,
+    structure_only: bool,
+    include_community: bool,
+    config: dict | None = None,
+) -> dict:
     files = discover_project_files(root)
     project_lang = _detect_project_language(files) if files else "unknown"
     if not files:
@@ -154,16 +165,58 @@ def _detect_language(path: str) -> str:
     help="Include Semgrep community rules (slower, needs network). "
     "Default is PRISM-curated rules only.",
 )
+@click.option(
+    "--config",
+    "config_path",
+    type=click.Path(exists=True),
+    default=None,
+    help="Path to .prism.toml config file.",
+)
+@click.option(
+    "--entry-points",
+    "entry_points",
+    multiple=True,
+    default=None,
+    help="Function names to treat as entry points (never flagged as dead). "
+    "Can be specified multiple times.",
+)
 @click.version_option(__version__)
-def cli(path: str, structure_only: bool, community: bool) -> None:
+def cli(
+    path: str,
+    structure_only: bool,
+    community: bool,
+    config_path: str | None,
+    entry_points: tuple[str, ...] | None,
+) -> None:
     """Analyze PATH and return enriched JSON structural measurements.
 
     By default runs tree-sitter measurements + PRISM-curated Semgrep rules.
     Use --community to include the full Semgrep community rule set (slower).
     Use --structure-only to skip Semgrep entirely (fastest).
+
+    --entry-points can be specified multiple times to mark functions that
+    should never be flagged as dead code (e.g., --entry-points main
+    --entry-points handler).
     """
     try:
-        output = _build_output(path, structure_only, community)
+        # Load config: project config, then override with CLI flags
+        config = load_config(
+            project_root=str(Path(path).resolve().parent if not Path(path).is_dir() else path)
+        )
+        if config_path:
+            import tomllib
+
+            with open(config_path, "rb") as f:
+                file_cfg = tomllib.load(f)
+            config = _deep_merge(config, file_cfg)
+        if entry_points:
+            config.setdefault("project", {})["entry_points"] = list(entry_points)
+
+        output = _build_output(path, structure_only, community, config)
+        # Attach config info to output for transparency
+        output["config"] = {
+            "entry_points": config.get("project", {}).get("entry_points", []),
+        }
         click.echo(json.dumps(output, indent=2))
     except Exception as e:
         click.echo(

@@ -14,9 +14,12 @@ from tree_sitter import QueryCursor, Tree
 from prism.engine.languages import (
     LANGUAGES,
     extension_to_language,
+    get_entry_points,
     get_ignore_names,
+    get_impure_call_targets,
     get_parser,
     get_queries,
+    get_risky_call_targets,
     get_thresholds,
     supported_extensions,
 )
@@ -272,7 +275,7 @@ def measure_dead_code(tree: Tree, data: bytes, file_path: str, lang: str) -> lis
     'dead_function' — they're API surface that may be used cross-file.
     """
     queries = get_queries(lang)
-    ignore_names = set(get_ignore_names(lang))
+    ignore_names = set(get_ignore_names(lang)) | set(get_entry_points(lang))
 
     defined: dict[str, int] = {}
     for _pat_idx, captures in _get_matches(queries["functions"], tree.root_node):
@@ -1023,33 +1026,7 @@ def _count_init_deps(body_node: Any, data: bytes) -> int:
 
 # ── Error handling coverage ──────────────────────────────────────────────
 
-# Function names that are risky when called without error handling
-_RISKY_FUNCTIONS: set[str] = {
-    "open",
-    "read",
-    "write",
-    "connect",
-    "request",
-    "fetch",
-    "load",
-    "send",
-    "recv",
-    "execute",
-    "query",
-    "json.loads",
-    "json.dumps",
-    "pickle.loads",
-    "yaml.load",
-    "subprocess.run",
-    "subprocess.call",
-    "subprocess.Popen",
-    "eval",
-    "exec",
-    "compile",
-    "os.system",
-    "os.popen",
-}
-
+# AST node types that represent function/method calls (language-agnostic)
 _RISKY_NODE_TYPES: set[str] = {
     "call",
     "call_expression",
@@ -1084,8 +1061,9 @@ def measure_error_handling(
         total = 0
         handled = 0
 
+        risky_targets = get_risky_call_targets(lang)
         for child in func_node.children:
-            t, h = _count_risky_calls(child, data)
+            t, h = _count_risky_calls(child, data, risky_targets)
             total += t
             handled += h
 
@@ -1110,7 +1088,7 @@ def measure_error_handling(
     return findings
 
 
-def _count_risky_calls(node: Any, data: bytes) -> tuple[int, int]:
+def _count_risky_calls(node: Any, data: bytes, risky_targets: list[str]) -> tuple[int, int]:
     """Count (total_risky_calls, handled_risky_calls) in a subtree.
 
     A call is risky if its target name matches known risky operations.
@@ -1122,13 +1100,13 @@ def _count_risky_calls(node: Any, data: bytes) -> tuple[int, int]:
     if node.type in ("try_statement", "try_block", "try"):
         # Everything inside try is considered handled
         for child in node.children:
-            t, h = _count_risky_in_try(child, data)
+            t, h = _count_risky_in_try(child, data, risky_targets)
             total += t
             handled += t  # All calls inside try are counted as handled
     elif node.type in _RISKY_NODE_TYPES:
         # Check if this call targets a risky function
         call_text = _text(data, node)
-        is_risky = any(rf in call_text for rf in _RISKY_FUNCTIONS)
+        is_risky = any(rf in call_text for rf in risky_targets)
         if is_risky:
             total += 1
             # Check parent chain for try/except
@@ -1148,27 +1126,27 @@ def _count_risky_calls(node: Any, data: bytes) -> tuple[int, int]:
         else:
             # Recurse into call arguments to find nested risky calls
             for child in node.children:
-                t, h = _count_risky_calls(child, data)
+                t, h = _count_risky_calls(child, data, risky_targets)
                 total += t
                 handled += h
     else:
         for child in node.children:
-            t, h = _count_risky_calls(child, data)
+            t, h = _count_risky_calls(child, data, risky_targets)
             total += t
             handled += h
 
     return total, handled
 
 
-def _count_risky_in_try(node: Any, data: bytes) -> tuple[int, int]:
+def _count_risky_in_try(node: Any, data: bytes, risky_targets: list[str]) -> tuple[int, int]:
     """Count risky calls inside a try block — all counted as handled."""
     total = 0
     if node.type in _RISKY_NODE_TYPES:
         call_text = _text(data, node)
-        if any(rf in call_text for rf in _RISKY_FUNCTIONS):
+        if any(rf in call_text for rf in risky_targets):
             total += 1
     for child in node.children:
-        t, _ = _count_risky_in_try(child, data)
+        t, _ = _count_risky_in_try(child, data, risky_targets)
         total += t
     return total, 0  # handled counted by caller
 
@@ -1400,6 +1378,9 @@ def measure_function_purity(
     # Module-level variable names (assigned at top level)
     module_vars = _find_module_vars(tree, data)
 
+    # Per-language known-impure function targets
+    impure_targets = get_impure_call_targets(lang)
+
     findings: list[dict[str, Any]] = []
 
     for _pat_idx, captures in _get_matches(queries["functions"], tree.root_node):
@@ -1414,7 +1395,7 @@ def measure_function_purity(
             continue
 
         issues: list[str] = []
-        impure = _check_purity(func_node, data, module_vars, set())
+        impure = _check_purity(func_node, data, module_vars, set(), impure_targets)
 
         if impure.get("global_assign"):
             issues.append(f"modifies {len(impure['global_assign'])} module variable(s)")
@@ -1457,39 +1438,12 @@ def _find_module_vars(tree: Tree, data: bytes) -> set[str]:
     return vars_set
 
 
-_IMPURE_CALL_TARGETS: set[str] = {
-    "print",
-    "input",
-    "open",
-    "write",
-    "read",
-    "random",
-    "randint",
-    "choice",
-    "shuffle",
-    "time",
-    "sleep",
-    "datetime.now",
-    "os.environ",
-    "os.getenv",
-    "os.putenv",
-    "sys.stdout.write",
-    "sys.stderr.write",
-    "logging",
-    "log",
-    "logger.info",
-    "logger.error",
-    "subprocess",
-    "os.system",
-    "os.popen",
-}
-
-
 def _check_purity(
     node: Any,
     data: bytes,
     module_vars: set[str],
     param_names: set[str],
+    impure_targets: list[str] | None = None,
 ) -> dict:
     """Check a function body for impurity signals.
 
@@ -1510,7 +1464,7 @@ def _check_purity(
                         if sub.type == "identifier":
                             param_names.add(_text(data, sub))
 
-    _walk_purity(node, data, module_vars, param_names, result)
+    _walk_purity(node, data, module_vars, param_names, result, impure_targets or [])
 
     # Deduplicate
     for key in result:
@@ -1525,6 +1479,7 @@ def _walk_purity(
     module_vars: set[str],
     param_names: set[str],
     result: dict,
+    impure_targets: list[str],
 ) -> None:
     """Walk the AST checking for impurity patterns."""
 
@@ -1541,12 +1496,12 @@ def _walk_purity(
     # Call to known-impure function
     if node.type in _RISKY_NODE_TYPES:
         call_text = _text(data, node)
-        for impure_target in _IMPURE_CALL_TARGETS:
+        for impure_target in impure_targets:
             if impure_target in call_text:
                 result["impure_calls"].append(impure_target)
 
     for child in node.children:
-        _walk_purity(child, data, module_vars, param_names, result)
+        _walk_purity(child, data, module_vars, param_names, result, impure_targets)
 
 
 # ── Unreachable code detection ──────────────────────────────────────────
