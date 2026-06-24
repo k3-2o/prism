@@ -1505,6 +1505,78 @@ def measure_code_clones(tree: Tree, data: bytes, file_path: str, lang: str) -> l
     return findings
 
 
+def measure_code_clones_project(
+    files: list[str], similarity_threshold: float = 0.8, min_tokens: int = 10
+) -> list[dict[str, Any]]:
+    """Detect structurally similar functions across all project files.
+
+    Builds structural signatures for every function in every file, then
+    compares all pairs across files (skipping same-file and cross-language).
+    """
+    all_funcs: list[tuple[str, str, str, int, list[str]]] = []
+
+    for fpath in files:
+        ext = Path(fpath).suffix.lower()
+        lang = extension_to_language(ext)
+        if not lang:
+            continue
+        try:
+            data = Path(fpath).read_bytes()
+            parser = get_parser(lang)
+            tree = parser.parse(data)
+        except Exception:
+            continue
+
+        queries = get_queries(lang)
+        for _pat_idx, captures in _get_matches(queries["functions"], tree.root_node):
+            func_name = ""
+            func_node = None
+            for name, nodes in captures.items():
+                if name == "name" and nodes:
+                    func_name = _text(data, nodes[0])
+                elif name == "func" and nodes:
+                    func_node = nodes[0]
+            if func_name and func_node:
+                sig = _build_structural_signature(func_node, max_depth=4)
+                if len(sig) >= min_tokens:
+                    all_funcs.append((fpath, lang, func_name, func_node.start_point[0] + 1, sig))
+
+    findings: list[dict[str, Any]] = []
+    for i in range(len(all_funcs)):
+        file_a, lang_a, name_a, line_a, sig_a = all_funcs[i]
+        len_a = len(sig_a)
+        for j in range(i + 1, len(all_funcs)):
+            file_b, lang_b, name_b, line_b, sig_b = all_funcs[j]
+            if lang_a != lang_b:
+                continue
+            if file_a == file_b:
+                continue
+            len_b = len(sig_b)
+            if len_a < len_b:
+                if len_a / len_b < 0.75:
+                    continue
+            else:
+                if len_b / len_a < 0.75:
+                    continue
+            similarity = _signature_similarity(sig_a, sig_b)
+            if similarity > similarity_threshold:
+                findings.append(
+                    _make_measurement(
+                        "code_clone",
+                        name_a,
+                        round(similarity, 2),
+                        similarity_threshold,
+                        {"file": file_a, "line": line_a},
+                        detail=(
+                            f"similar to {name_b} in {Path(file_b).name}"
+                            f" ({round(similarity * 100)}%)"
+                        ),
+                    )
+                )
+
+    return findings
+
+
 def _build_structural_signature(node: Any, max_depth: int = 6) -> list[str]:
     """Walk a function body and record the sequence of meaningful node types.
 
@@ -2242,6 +2314,7 @@ def run_project(files: list[str]) -> dict[str, Any]:
             continue  # Skip unsupported files
     findings.extend(measure_cyclic_imports(files, ""))
     findings.extend(measure_module_coupling(files))
+    findings.extend(measure_code_clones_project(files))
 
     # Compute project-level meta
     nloc_values = [m["value"] for m in findings if m["metric"] == "nloc" and m["value"] is not None]
