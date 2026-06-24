@@ -1728,6 +1728,130 @@ def measure_code_clones_project(
     return findings
 
 
+# ── Token-based clone detection (more precise, like PMD CPD) ──────────
+
+
+def _tokenize_function(node: Any, data: bytes) -> list[str]:
+    """Extract token sequence from a function body.
+
+    Walks the AST and collects text of all leaf nodes (identifiers, keywords,
+    operators, punctuation). Skips comments and whitespace.
+    This produces a token sequence independent of formatting.
+    """
+    tokens: list[str] = []
+    _collect_tokens(node, data, tokens)
+    return tokens
+
+
+def _collect_tokens(node: Any, data: bytes, tokens: list[str]) -> None:
+    """Recursively collect tokens from AST leaves."""
+    if node.type == "comment":
+        return
+    if len(node.children) == 0:
+        tok = _text(data, node)
+        if tok and not tok.isspace():
+            tokens.append(tok)
+        return
+    for child in node.children:
+        _collect_tokens(child, data, tokens)
+
+
+def measure_code_clones_token(
+    files: list[str], min_tokens: int = 50, max_clones: int = 200
+) -> list[dict[str, Any]]:
+    """Detect code clones using token-based matching (like PMD CPD).
+
+    Tokenizes each function body into a sequence of tokens, then uses
+    substring hashing to find identical token runs across files.
+    This catches Type-2 clones (renamed identifiers) that AST structural
+    matching misses.
+
+    Args:
+        files: list of file paths to analyze
+        min_tokens: minimum token sequence length to report as a clone
+        max_clones: maximum number of clone pairs to report (performance)
+    """
+    # Collect tokenized functions: (file, lang, name, line, tokens)
+    all_funcs: list[tuple[str, str, str, int, list[str]]] = []
+
+    for fpath in files:
+        ext = Path(fpath).suffix.lower()
+        lang = extension_to_language(ext)
+        if not lang:
+            continue
+        try:
+            data = Path(fpath).read_bytes()
+            parser = get_parser(lang)
+            tree = parser.parse(data)
+        except Exception:
+            continue
+
+        queries = get_queries(lang)
+        for _pat_idx, captures in _get_matches(queries["functions"], tree.root_node):
+            func_name = ""
+            func_node = None
+            for name, nodes in captures.items():
+                if name == "name" and nodes:
+                    func_name = _text(data, nodes[0])
+                elif name == "func" and nodes:
+                    func_node = nodes[0]
+            if func_name and func_node:
+                tokens = _tokenize_function(func_node, data)
+                if len(tokens) >= min_tokens:
+                    all_funcs.append((fpath, lang, func_name, func_node.start_point[0] + 1, tokens))
+
+    # Build hash index for all token subsequences of length min_tokens
+    # Use tuple hashing for exact matching
+    from collections import defaultdict
+
+    seen_hashes: dict[tuple, list[tuple[str, str, int]]] = defaultdict(list)
+
+    for fpath, lang, name, line, tokens in all_funcs:
+        for i in range(len(tokens) - min_tokens + 1):
+            window = tuple(tokens[i : i + min_tokens])
+            if len(seen_hashes[window]) < 3:  # limit per-hash entries
+                seen_hashes[window].append((fpath, name, line))
+
+    # Find clone pairs (same hash, different files)
+    findings: list[dict[str, Any]] = []
+    seen_pairs: set[tuple] = set()
+
+    for matches in seen_hashes.values():
+        if len(matches) < 2:
+            continue
+        for i in range(len(matches)):
+            for j in range(i + 1, len(matches)):
+                fa, na, la = matches[i]
+                fb, nb, lb = matches[j]
+                if fa == fb:
+                    continue
+                pair = (fa, fb, min(na, nb), max(na, nb))
+                if pair in seen_pairs:
+                    continue
+                seen_pairs.add(pair)
+                findings.append(
+                    _make_measurement(
+                        "code_clone",
+                        na,
+                        1.0,
+                        0.9,
+                        {"file": fa, "line": la},
+                        detail=(
+                            f"token-clone of {nb} in {Path(fb).name}"
+                            f" ({min_tokens}+ identical tokens)"
+                        ),
+                    )
+                )
+                if len(findings) >= max_clones:
+                    break
+            if len(findings) >= max_clones:
+                break
+        if len(findings) >= max_clones:
+            break
+
+    return findings
+
+
 def _build_structural_signature(node: Any, max_depth: int = 6) -> list[str]:
     """Walk a function body and record the sequence of meaningful node types.
 
@@ -2532,6 +2656,7 @@ def run_project(files: list[str]) -> dict[str, Any]:
     findings.extend(measure_cyclic_imports(files, ""))
     findings.extend(measure_module_coupling(files))
     findings.extend(measure_code_clones_project(files))
+    findings.extend(measure_code_clones_token(files))
 
     # Build module graph for cross-file dead code detection
     project_import_graph: dict[str, list[str]] = {}
@@ -2563,6 +2688,14 @@ def run_project(files: list[str]) -> dict[str, Any]:
 
         # Use module graph's import graph for visualization
         project_import_graph = mg.get_import_graph()
+
+        # Import rule enforcement
+        try:
+            from prism.enrich.import_rules import check_import_rules
+
+            findings.extend(check_import_rules(files, {"import_graph": project_import_graph}, cfg))
+        except Exception:
+            pass
     except Exception:
         project_import_graph = {}
 
