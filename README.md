@@ -7,6 +7,8 @@ Structural code analysis for AI agent loops. Tree-sitter powered, 25+ metrics ac
 prism path/to/file.py
 prism path/to/project/
 prism . --visualize
+prism . --filter dead_function,unreachable_code
+prism . --compact            # machine-readable
 ```
 
 [![python-3.12](https://img.shields.io/badge/python-3.12-blue)]()
