@@ -882,9 +882,16 @@ def structural_diff(file_path: str) -> list[dict[str, Any]]:
     return _compute_diff_changes(current_funcs, head_funcs, file_path)
 
 
+_GIT_CONTENT_CACHE: dict[tuple[str, str], bytes | None] = {}
+
+
 def _fetch_git_version_at_commit(file_path: str, commit: str) -> bytes | None:
-    """Get the content of a file at a specific git commit."""
+    """Get the content of a file at a specific git commit (cached)."""
     import subprocess
+
+    cache_key = (file_path, commit)
+    if cache_key in _GIT_CONTENT_CACHE:
+        return _GIT_CONTENT_CACHE[cache_key]
 
     try:
         rel_path = Path(file_path).resolve()
@@ -896,6 +903,7 @@ def _fetch_git_version_at_commit(file_path: str, commit: str) -> bytes | None:
             cwd=rel_path.parent,
         ).stdout.strip()
         if not git_root:
+            _GIT_CONTENT_CACHE[cache_key] = None
             return None
         rel = rel_path.relative_to(Path(git_root).resolve())
         result = subprocess.run(
@@ -906,9 +914,13 @@ def _fetch_git_version_at_commit(file_path: str, commit: str) -> bytes | None:
             cwd=Path(git_root).resolve(),
         )
         if result.returncode != 0:
+            _GIT_CONTENT_CACHE[cache_key] = None
             return None
-        return result.stdout.encode("utf-8")
+        data = result.stdout.encode("utf-8")
+        _GIT_CONTENT_CACHE[cache_key] = data
+        return data
     except (subprocess.TimeoutExpired, ValueError, FileNotFoundError):
+        _GIT_CONTENT_CACHE[cache_key] = None
         return None
 
 

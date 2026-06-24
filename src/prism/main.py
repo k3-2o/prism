@@ -252,6 +252,37 @@ def _generate_visualization(
             output["visualization_error"] = "dot command not found; install graphviz"
 
 
+def _apply_filter(output: dict, filters: set[str]) -> None:
+    """Filter findings in the output to only include specified metric types."""
+    for info in output.get("files", {}).values():
+        info["findings"] = [f for f in info.get("findings", []) if f.get("metric") in filters]
+    # Prune files with no remaining findings
+    output["files"] = {fp: info for fp, info in output.get("files", {}).items() if info["findings"]}
+    # Recompute summary
+    all_findings: list[dict] = []
+    for info in output.get("files", {}).values():
+        all_findings.extend(info["findings"])
+    output["summary"] = _build_summary(all_findings)
+
+
+def _print_compact(output: dict) -> None:
+    """Print compact one-liner format for machine consumption."""
+    for fpath, info in sorted(output.get("files", {}).items()):
+        for f in info["findings"]:
+            parts = [
+                f"f={f['function']}",
+                f"m={f['metric']}",
+                f"l={f.get('line', 1)}",
+            ]
+            if f.get("confidence") is not None:
+                parts.append(f"c={f['confidence']}")
+            if f.get("value") is not None:
+                parts.append(f"v={f['value']}")
+            if f.get("detail"):
+                parts.append(f"d={f['detail']}")
+            print(f"{fpath}: {' '.join(parts)}")
+
+
 def _detect_language(path: str) -> str:
     ext = Path(path).suffix.lower()
     lang = extension_to_language(ext)
@@ -288,6 +319,19 @@ def _detect_language(path: str) -> str:
     default="dot",
     help="Output format for visualization (default: dot). Requires graphviz.",
 )
+@click.option(
+    "--filter",
+    "metric_filter",
+    default=None,
+    help="Only show specific metric types (comma-separated)."
+    " Example: --filter dead_function,unused_import",
+)
+@click.option(
+    "--compact",
+    is_flag=True,
+    default=False,
+    help="Compact output: one line per finding for machine consumption.",
+)
 @click.version_option(__version__)
 def cli(
     path: str,
@@ -295,6 +339,8 @@ def cli(
     entry_points: tuple[str, ...] | None,
     visualize: bool = False,
     visualize_format: str = "dot",
+    metric_filter: str | None = None,
+    compact: bool = False,
 ) -> None:
     """Analyze PATH and return JSON structural measurements.
 
@@ -318,7 +364,17 @@ def cli(
         output = _build_output(path, config, visualize=visualize, visualize_format=visualize_format)
         output["prism"]["entry_points"] = config.get("project", {}).get("entry_points", [])
 
-        click.echo(json.dumps(output, indent=2))
+        # Apply metric filter
+        if metric_filter:
+            filters = set(m.strip() for m in metric_filter.split(","))
+            _apply_filter(output, filters)
+            output["prism"]["filter"] = list(filters)
+
+        # Output format
+        if compact:
+            _print_compact(output)
+        else:
+            click.echo(json.dumps(output, indent=2))
     except Exception as e:
         click.echo(
             json.dumps(
