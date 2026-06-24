@@ -15,6 +15,7 @@ from prism.engine.semgrep_runner import run_semgrep
 from prism.engine.treerunner import run as treerunner_run
 from prism.engine.treerunner import run_project as treerunner_run_project
 from prism.enrich.enricher import discover_project_files, enrich_by_line, enrich_measurements
+from prism.output.viz import render_dependency_graph, try_render_svg
 
 # Path to PRISM-curated Semgrep rules, shipped with the package
 _PRISM_RULES_DIR = str(Path(__file__).resolve().parent / "rules")
@@ -25,10 +26,19 @@ def _build_output(
     structure_only: bool,
     include_community: bool,
     config: dict | None = None,
+    visualize: bool = False,
+    visualize_format: str = "dot",
 ) -> dict:
     p = Path(path)
     if p.is_dir():
-        return _build_project_output(str(p.resolve()), structure_only, include_community, config)
+        return _build_project_output(
+            str(p.resolve()),
+            structure_only,
+            include_community,
+            config,
+            visualize=visualize,
+            visualize_format=visualize_format,
+        )
 
     measurements = treerunner_run(path)
     project_files = discover_project_files(str(p.parent))
@@ -86,6 +96,8 @@ def _build_project_output(
     structure_only: bool,
     include_community: bool,
     config: dict | None = None,
+    visualize: bool = False,
+    visualize_format: str = "dot",
 ) -> dict:
     files = discover_project_files(root)
     project_lang = _detect_project_language(files) if files else "unknown"
@@ -134,7 +146,7 @@ def _build_project_output(
             all_community.extend(x for x in raw if x.get("source") == "semgrep-community")
             all_curated.extend(x for x in raw if x.get("source") == "semgrep-curated")
 
-    return {
+    output = {
         "version": __version__,
         "file": root,
         "language": project_lang,
@@ -145,6 +157,61 @@ def _build_project_output(
         "semgrep_community": all_community,
         "semgrep_curated": all_curated,
     }
+
+    # Visualization (optional, only for project mode)
+    if visualize:
+        _generate_visualization(files, all_measurements, root, output, visualize_format)
+
+    return output
+
+
+def _generate_visualization(
+    files: list[str],
+    measurements: list[dict],
+    root: str,
+    output: dict,
+    viz_format: str,
+) -> None:
+    """Generate dependency graph visualization."""
+    meta = output.get("meta", {})
+    import_graph: dict[str, list[str]] = meta.get("import_graph", {})
+
+    # Collect cycles from measurements
+    cycles: list[list[str]] = []
+    for m in measurements:
+        if m.get("metric") == "cyclic_import":
+            cycle_path = m.get("context", {}).get("cycle", [])
+            if cycle_path and cycle_path not in cycles:
+                cycles.append(cycle_path)
+
+    # Build node labels with NLOC
+    file_labels: dict[str, str] = {}
+    for m in measurements:
+        if m.get("metric") == "nloc":
+            mod_name = m.get("function", "")
+            val = m.get("value", 0)
+            if mod_name:
+                file_labels[mod_name] = f"{mod_name} ({val} NLOC)"
+
+    # Write DOT file
+    root_name = Path(root).name
+    dot_path = f"{root_name}-deps.dot"
+    render_dependency_graph(
+        dict(import_graph),
+        cycles,
+        dot_path,
+        file_labels=file_labels or None,
+    )
+
+    output["visualization"] = dot_path
+
+    # Try to render to SVG/PNG if requested
+    if viz_format != "dot":
+        rendered = try_render_svg(dot_path, viz_format)
+        if rendered:
+            output["visualization_rendered"] = rendered
+        else:
+            output["visualization_error"] = "dot command not found; install graphviz"
 
 
 def _detect_language(path: str) -> str:
@@ -183,6 +250,19 @@ def _detect_language(path: str) -> str:
     help="Function names to treat as entry points (never flagged as dead). "
     "Can be specified multiple times.",
 )
+@click.option(
+    "--visualize",
+    is_flag=True,
+    default=False,
+    help="Generate a dependency graph DOT file.",
+)
+@click.option(
+    "--visualize-format",
+    "visualize_format",
+    type=click.Choice(["dot", "svg", "png"]),
+    default="dot",
+    help="Output format for visualization (default: dot). Requires graphviz.",
+)
 @click.version_option(__version__)
 def cli(
     path: str,
@@ -190,6 +270,8 @@ def cli(
     community: bool,
     config_path: str | None,
     entry_points: tuple[str, ...] | None,
+    visualize: bool = False,
+    visualize_format: str = "dot",
 ) -> None:
     """Analyze PATH and return enriched JSON structural measurements.
 
@@ -215,7 +297,14 @@ def cli(
         if entry_points:
             config.setdefault("project", {})["entry_points"] = list(entry_points)
 
-        output = _build_output(path, structure_only, community, config)
+        output = _build_output(
+            path,
+            structure_only,
+            community,
+            config,
+            visualize=visualize,
+            visualize_format=visualize_format,
+        )
         # Attach config info to output for transparency
         output["config"] = {
             "entry_points": config.get("project", {}).get("entry_points", []),

@@ -2498,6 +2498,23 @@ def run_project(files: list[str]) -> dict[str, Any]:
         if lang:
             lang_count[lang] += 1
 
+    # Build import graph for visualization
+    import_graph: dict[str, list[str]] = {}
+    project_files_set = {str(Path(f).resolve()) for f in files}
+    for fpath in files:
+        p = Path(fpath)
+        try:
+            data = p.read_bytes()
+        except Exception:
+            continue
+        ext = p.suffix.lower()
+        lang = extension_to_language(ext) or "python"
+        resolved = _extract_project_imports(data, lang, str(p), project_files_set)
+        src_name = p.stem
+        import_graph[src_name] = sorted(
+            [Path(r).stem for r in resolved if Path(r).stem != src_name]
+        )
+
     meta = {
         "total_files": len(files),
         "total_nloc": total_nloc,
@@ -2505,6 +2522,7 @@ def run_project(files: list[str]) -> dict[str, Any]:
         "avg_cognitive": avg_cog,
         "max_nesting": max_nest,
         "languages": dict(lang_count.most_common()),
+        "import_graph": import_graph,
     }
 
     return {"measurements": findings, "meta": meta}
