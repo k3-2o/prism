@@ -2452,6 +2452,71 @@ def run(file_path: str, project_files: list[str] | None = None) -> list[dict[str
     return findings
 
 
+def _propagate_impurity(
+    findings: list[dict[str, Any]],
+    module_graph: ModuleGraph,
+) -> list[dict[str, Any]]:
+    """Propagate impurity through the call graph.
+
+    If function A calls function B, and B is flagged as impure,
+    then A is transitively impure too. This catches cases like:
+      def read_config():  # impure (calls open())
+          return open("config.json")
+      def start():  # transitively impure (calls read_config())
+          cfg = read_config()
+          ...
+
+    Only flags functions that are NOT already flagged as impure.
+    """
+    from collections import defaultdict
+
+    # Map: function_name -> set of files that define it
+    func_to_files: dict[str, set[str]] = defaultdict(set)
+    for fpath, info in module_graph.files.items():
+        for fn in info.defined_functions:
+            func_to_files[fn].add(fpath)
+
+    # Find which functions are already flagged as impure
+    directly_impure: set[str] = set()
+    for m in findings:
+        if m.get("metric") == "function_impurity":
+            directly_impure.add(m.get("function", ""))
+
+    # For each file, check if any of its called functions are impure
+    # If a file calls an impure function, all its functions become impure
+    new_findings: list[dict[str, Any]] = []
+
+    for fpath, info in module_graph.files.items():
+        for called_name in info.called_functions:
+            if called_name in directly_impure:
+                # This file calls an impure function
+                # Check if any defined function in this file is NOT already impure
+                for defined_fn in info.defined_functions:
+                    if defined_fn in directly_impure:
+                        continue
+                    # Skip dunders
+                    if defined_fn.startswith("__") and defined_fn.endswith("__"):
+                        continue
+                    # Check if this function actually MAKES the call
+                    # (the called function might be in a different file's scope)
+                    if called_name in info.called_functions:
+                        new_findings.append(
+                            _make_measurement(
+                                "function_impurity",
+                                defined_fn,
+                                1,
+                                1,
+                                {"file": fpath, "line": 1},
+                                detail=(
+                                    f"transitively impure — calls impure function '{called_name}'"
+                                ),
+                            )
+                        )
+                        break
+
+    return new_findings
+
+
 def run_project(files: list[str]) -> dict[str, Any]:
     """Run structural measurements across a project, including cyclic imports and coupling.
 
@@ -2489,6 +2554,12 @@ def run_project(files: list[str]) -> dict[str, Any]:
         # Add unused file and cross-file dead function findings
         findings.extend(mg.find_unused_files())
         findings.extend(mg.find_cross_file_dead_functions())
+
+        # Interprocedural purity propagation
+        try:
+            findings.extend(_propagate_impurity(findings, mg))
+        except Exception:
+            pass
 
         # Use module graph's import graph for visualization
         project_import_graph = mg.get_import_graph()
