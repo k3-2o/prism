@@ -1787,6 +1787,75 @@ def _remove_module_names(
         _remove_module_names(child, data, imported_names, lang)
 
 
+# ── Unused classes ───────────────────────────────────────────────────────
+
+
+def measure_unused_classes(
+    tree: Tree, data: bytes, file_path: str, lang: str
+) -> list[dict[str, Any]]:
+    """Find classes defined but never referenced within the same file.
+
+    Mirrors the dead_function detection for class definitions.
+    A class is unused if its name never appears as an identifier
+    reference anywhere in the file outside its own definition.
+    """
+    queries = get_queries(lang)
+
+    # Check if the language has a classes query
+    if "classes" not in queries:
+        return []
+
+    # Step 1: Collect defined class names
+    defined: dict[str, int] = {}
+    for _pat_idx, captures in _get_matches(queries["classes"], tree.root_node):
+        class_name = ""
+        for name, nodes in captures.items():
+            if name == "name" and nodes:
+                class_name = _text(data, nodes[0])
+        if class_name:
+            defined[class_name] = nodes[0].start_point[0] + 1 if nodes else 1
+
+    if not defined:
+        return []
+
+    # Step 2: Collect all identifier references from calls and general use
+    # Uses the calls query for constructor calls (ClassName()) AND
+    # general identifier walk (excluding class definitions themselves).
+    called_names: set[str] = set()
+    for node in _get_captures(queries["calls"], tree.root_node).get("name", []):
+        called_names.add(_text(data, node))
+
+    # Also collect identifiers from the full tree, excluding own-definition names
+    all_identifiers: set[str] = set()
+    _collect_identifiers(tree.root_node, data, all_identifiers)
+    # Remove class definition names from the used set (they always appear
+    # in their own definition and we don't want to count that as usage)
+    own_names = set(defined.keys())
+
+    # A class is used if it appears in calls OR in general identifiers.
+    # The calls query captures constructor calls like Greeter().
+    # The identifier walk catches everything else (type annotations, etc.).
+    # Only subtract own_names from identifiers, not from calls — a class
+    # that's called is definitely used regardless of its own definition.
+    used_names = called_names | (all_identifiers - own_names)
+
+    # Step 3: Find unused classes
+    findings: list[dict[str, Any]] = []
+    for name, line in defined.items():
+        if name not in used_names:
+            findings.append(
+                _make_measurement(
+                    "unused_class",
+                    name,
+                    0,
+                    None,
+                    {"file": file_path, "line": line},
+                )
+            )
+
+    return findings
+
+
 def run(file_path: str, project_files: list[str] | None = None) -> list[dict[str, Any]]:
     """Run all structural measurements on a single file."""
     tree, data, lang = parse_file(file_path)
@@ -1807,6 +1876,7 @@ def run(file_path: str, project_files: list[str] | None = None) -> list[dict[str
     findings.extend(measure_function_purity(tree, data, file_path, lang))
     findings.extend(measure_unreachable_code(tree, data, file_path, lang))
     findings.extend(measure_unused_imports(tree, data, file_path, lang))
+    findings.extend(measure_unused_classes(tree, data, file_path, lang))
     findings.extend(structural_diff(file_path))
 
     return findings

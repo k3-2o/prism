@@ -129,6 +129,11 @@ _register(
             "imports": """
             (import_statement source: (string) @name)
         """,
+            "classes": """
+            (class_declaration
+              name: (identifier) @name
+              body: (class_body) @body) @class
+        """,
         },
         "ignore_names": ["constructor"],
     },
@@ -161,6 +166,11 @@ _register(
         """,
             "imports": """
             (import_statement source: (string) @name)
+        """,
+            "classes": """
+            (class_declaration
+              name: (identifier) @name
+              body: (class_body) @body) @class
         """,
         },
         "ignore_names": ["constructor"],
@@ -243,6 +253,11 @@ _register(
             "calls": "(method_invocation name: (identifier) @name) @call",
             "imports": "(import_declaration (scoped_identifier (identifier) @name))",
         },
+        "classes": """
+            (class_declaration
+              name: (identifier) @name
+              body: (class_body) @body) @class
+        """,
         "ignore_names": [],
     },
 )
@@ -263,6 +278,11 @@ _register(
             "calls": "(call method: (identifier) @name) @call",
             "imports": "(call method: (identifier) @name)",
         },
+        "classes": """
+            (class
+              name: (constant) @name
+              body: (body_statement) @body) @class
+        """,
         "ignore_names": ["initialize"],
     },
 )
@@ -287,6 +307,11 @@ _register(
         """,
             "imports": "(namespace_use_clause (qualified_name (name) @name))",
         },
+        "classes": """
+            (class_declaration
+              name: (name) @name
+              body: (declaration_list) @body) @class
+        """,
         "ignore_names": ["__construct"],
     },
 )
@@ -344,6 +369,11 @@ _register(
             (preproc_include path: (system_lib_string) @name)
         """,
         },
+        "classes": """
+            (class_specifier
+              name: (type_identifier) @name
+              body: (field_declaration_list) @body) @class
+        """,
         "ignore_names": ["main"],
     },
 )
