@@ -1493,7 +1493,111 @@ def _walk_purity(
         _walk_purity(child, data, module_vars, param_names, result)
 
 
-# ── Top-level runners ────────────────────────────────────────────────────
+# ── Unreachable code detection ──────────────────────────────────────────
+
+# Terminal node type keywords — any node whose type contains one of these
+# is a flow-terminating statement. Works across all tree-sitter grammars.
+_TERMINAL_KEYWORDS = frozenset(
+    {
+        "return",
+        "break",
+        "continue",
+        "raise",
+        "throw",
+        "panic",
+    }
+)
+
+
+def measure_unreachable_code(
+    tree: Tree, data: bytes, file_path: str, lang: str
+) -> list[dict[str, Any]]:
+    """Find code that follows return/break/continue/raise/throw statements.
+
+    Detects code after a terminal statement within the same block.
+    This is code that can never execute — 100% confidence.
+
+    Works generically across all languages by matching node type keywords.
+    No per-language configuration needed.
+    """
+    queries = get_queries(lang)
+    findings: list[dict[str, Any]] = []
+
+    for _pat_idx, captures in _get_matches(queries["functions"], tree.root_node):
+        func_name = ""
+        func_node = None
+        for name, nodes in captures.items():
+            if name == "name" and nodes:
+                func_name = _text(data, nodes[0])
+            elif name == "func" and nodes:
+                func_node = nodes[0]
+
+        if not func_name or not func_node:
+            continue
+
+        # Walk the function body looking for terminal statements
+        unreachable_lines: list[int] = []
+        _find_unreachable(func_node, data, _TERMINAL_KEYWORDS, unreachable_lines)
+
+        if unreachable_lines:
+            line = func_node.start_point[0] + 1
+            findings.append(
+                _make_measurement(
+                    "unreachable_code",
+                    func_name,
+                    len(unreachable_lines),
+                    None,
+                    {"file": file_path, "line": line},
+                    detail=(
+                        f"{len(unreachable_lines)} unreachable at lines {unreachable_lines[:5]}"
+                    ),
+                )
+            )
+
+    return findings
+
+
+def _find_unreachable(
+    node: Any,
+    data: bytes,
+    terminal_keywords: frozenset[str],
+    unreachable_lines: list[int],
+) -> bool:
+    """Walk the AST recursively.
+
+    For each node, check if it's a terminal statement. If it is, check if
+    it has a next sibling — if yes, those siblings are unreachable.
+
+    Returns True if this subtree contains a terminal (to propagate upward).
+    """
+    # Only named nodes can be terminal statements.
+    # Anonymous nodes (keywords like 'return', 'break') should be skipped.
+    if node.is_named:
+        # Check if THIS node is a terminal statement (return, break, etc.)
+        is_terminal = any(kw in node.type for kw in terminal_keywords)
+
+        if is_terminal:
+            # Check if terminal has a next sibling in the same block
+            parent = node.parent
+            if parent is not None:
+                siblings = [c for c in parent.children]
+                idx = siblings.index(node)
+                # Everything after this terminal is unreachable
+                for sibling in siblings[idx + 1 :]:
+                    # Skip comments — they often appear after return on the same line
+                    if sibling.is_named and sibling.type != "comment":
+                        unreachable_lines.append(sibling.start_point[0] + 1)
+                # Don't recurse into children of terminal (they don't execute)
+                return True
+
+    # Recurse into children
+    child_terminal = False
+    for child in node.children:
+        if _find_unreachable(child, data, terminal_keywords, unreachable_lines):
+            child_terminal = True
+            break  # Stop processing siblings after terminal child
+
+    return child_terminal
 
 
 def run(file_path: str, project_files: list[str] | None = None) -> list[dict[str, Any]]:
@@ -1514,6 +1618,7 @@ def run(file_path: str, project_files: list[str] | None = None) -> list[dict[str
     findings.extend(measure_import_depth(tree, data, file_path, lang))
     findings.extend(measure_code_clones(tree, data, file_path, lang))
     findings.extend(measure_function_purity(tree, data, file_path, lang))
+    findings.extend(measure_unreachable_code(tree, data, file_path, lang))
     findings.extend(structural_diff(file_path))
 
     return findings
