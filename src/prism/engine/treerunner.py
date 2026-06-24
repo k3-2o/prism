@@ -1600,6 +1600,193 @@ def _find_unreachable(
     return child_terminal
 
 
+# ── Unused imports ───────────────────────────────────────────────────────
+
+# Node types that contain import statements — used to exclude identifiers
+# inside imports from the "used names" set.
+_IMPORT_NODE_TYPES = frozenset(
+    {
+        "import_statement",
+        "import_from_statement",
+        "import_declaration",
+        "import",
+        "use_declaration",
+        "preproc_include",
+        "namespace_use_clause",
+    }
+)
+
+
+def measure_unused_imports(
+    tree: Tree, data: bytes, file_path: str, lang: str
+) -> list[dict[str, Any]]:
+    """Find imported names that are never referenced in the file.
+
+    For each import statement, extract the specific names being imported.
+    Then check if each name appears anywhere else in the file as an
+    identifier reference. If not, it's unused.
+
+    Works across languages by using the existing imports query +
+    walking the tree for additional per-language import patterns.
+    """
+    queries = get_queries(lang)
+
+    # Step 1: Collect imported names from the imports query
+    imported_names: set[str] = set()
+    import_lines: dict[str, int] = {}
+
+    for node in _get_captures(queries["imports"], tree.root_node).get("name", []):
+        name = _text(data, node)
+        imported_names.add(name)
+        # Track the first line where this name appears
+        if name not in import_lines:
+            import_lines[name] = node.start_point[0] + 1
+
+    # Step 2: Extract individual names from 'from X import Y' style imports
+    # These often capture the module name instead of the specific import names
+    _collect_from_import_names(tree.root_node, data, lang, imported_names, import_lines)
+
+    # Remove module names from 'from X import Y' — we only want the
+    # specific imported symbols, not the source module.
+    _remove_module_names(tree.root_node, data, imported_names, lang)
+
+    if not imported_names:
+        return []
+
+    # Step 3: Collect all identifier references in non-import code
+    used_names: set[str] = set()
+    _collect_identifiers(tree.root_node, data, used_names, imported=False)
+
+    # Step 4: Find unused imports
+    findings: list[dict[str, Any]] = []
+    for name in sorted(imported_names):
+        if name not in used_names:
+            line = import_lines.get(name, 1)
+            findings.append(
+                _make_measurement(
+                    "unused_import",
+                    name,
+                    0,
+                    None,
+                    {"file": file_path, "line": line},
+                )
+            )
+
+    return findings
+
+
+def _collect_from_import_names(
+    node: Any,
+    data: bytes,
+    lang: str,
+    imported_names: set[str],
+    import_lines: dict[str, int],
+) -> None:
+    """Walk the AST for 'from X import Y' style imports and extract the
+    specific imported names (Y), not just the module name (X).
+
+    Different languages have different AST structures for this:
+    - Python: import_from_statement → child dotted_name nodes
+    - JS/TS: import_specifier nodes within import_statement
+    """
+    if node.type == "import_from_statement":
+        # Python: from dataclasses import dataclass, field
+        # The individual names are dotted_name children of import_from_statement
+        for child in node.children:
+            if child.type == "dotted_name":
+                # Check this is a direct child (imported name), not the module name
+                # Module name is typically the first dotted_name child
+                name = _text(data, child)
+                # Only add names that aren't already tracked (module names)
+                if name not in imported_names:
+                    imported_names.add(name)
+                    if name not in import_lines:
+                        import_lines[name] = child.start_point[0] + 1
+
+    elif node.type == "import_specifier":
+        # JS/TS: import { foo, bar } from 'module'
+        for child in node.children:
+            if child.type in ("identifier", "property_identifier"):
+                name = _text(data, child)
+                imported_names.add(name)
+                if name not in import_lines:
+                    import_lines[name] = child.start_point[0] + 1
+
+    elif node.type == "import_clause":
+        # JS/TS default import: import express from 'module'
+        # The default import name is a direct identifier child
+        for child in node.children:
+            if child.type == "identifier":
+                name = _text(data, child)
+                # Don't add if it's already tracked (e.g., from specifier)
+                if name not in import_lines:
+                    imported_names.add(name)
+                    import_lines[name] = child.start_point[0] + 1
+
+    # Recurse
+    for child in node.children:
+        _collect_from_import_names(child, data, lang, imported_names, import_lines)
+
+
+def _collect_identifiers(
+    node: Any,
+    data: bytes,
+    used_names: set[str],
+    imported: bool = False,
+) -> None:
+    """Walk the AST collecting identifier text, skipping import nodes.
+
+    When imported=True, we're inside an import statement and should skip.
+    """
+    # Skip entire import subtrees
+    if node.type in _IMPORT_NODE_TYPES:
+        return
+
+    # Collect identifiers
+    if node.type == "identifier" and node.is_named:
+        name = _text(data, node)
+        if name:
+            used_names.add(name)
+
+    # Recurse into children
+    for child in node.children:
+        _collect_identifiers(child, data, used_names, imported)
+
+
+def _remove_module_names(
+    node: Any,
+    data: bytes,
+    imported_names: set[str],
+    lang: str = "",
+) -> None:
+    """Remove module names from 'from X import Y' and 'import { X } from Y'
+    style imports. The module path is not an imported symbol — we only
+    want the specific symbols being imported.
+    """
+    if node.type == "import_from_statement":
+        # Python: from pathlib import Path
+        for child in node.children:
+            if child.type == "dotted_name":
+                name = _text(data, child)
+                imported_names.discard(name)
+                break
+
+    elif node.type == "import_statement":
+        # JS/TS: import { X } from 'module'
+        # Only discard the quoted version of the source string.
+        # Don't strip quotes and discard — that would remove legitimate
+        # import names like 'express' (added by _collect_from_import_names).
+        for child in node.children:
+            if child.type == "string":
+                name = _text(data, child)
+                # Only discard the exact string with quotes
+                imported_names.discard(name)
+                break
+
+    for child in node.children:
+        _remove_module_names(child, data, imported_names, lang)
+
+
 def run(file_path: str, project_files: list[str] | None = None) -> list[dict[str, Any]]:
     """Run all structural measurements on a single file."""
     tree, data, lang = parse_file(file_path)
@@ -1619,6 +1806,7 @@ def run(file_path: str, project_files: list[str] | None = None) -> list[dict[str
     findings.extend(measure_code_clones(tree, data, file_path, lang))
     findings.extend(measure_function_purity(tree, data, file_path, lang))
     findings.extend(measure_unreachable_code(tree, data, file_path, lang))
+    findings.extend(measure_unused_imports(tree, data, file_path, lang))
     findings.extend(structural_diff(file_path))
 
     return findings
