@@ -74,6 +74,7 @@ _register(
         """,
             "calls": """
             (call function: (identifier) @name) @call
+            (call function: (attribute attribute: (identifier) @name)) @call
         """,
             "imports": """
             (import_statement name: (dotted_name) @name)
@@ -214,6 +215,7 @@ _register(
             "calls": """
             (call_expression function: (identifier) @name) @call
             (call_expression function: (scoped_identifier name: (identifier) @name)) @call
+            (call_expression function: (field_expression field: (field_identifier) @name)) @call
         """,
             "imports": """
             (use_declaration (scoped_identifier (identifier) @name))
@@ -279,7 +281,10 @@ _register(
                 "(function_definition name: (name) @name"
                 " parameters: (formal_parameters) @params) @func"
             ),
-            "calls": "(function_call_expression function: (qualified_name (name) @name)) @call",
+            "calls": """
+            (function_call_expression (name) @name) @call
+            (member_call_expression (name) @name) @call
+        """,
             "imports": "(namespace_use_clause (qualified_name (name) @name))",
         },
         "ignore_names": ["__construct"],
@@ -332,6 +337,7 @@ _register(
         """,
             "calls": """
             (call_expression function: (identifier) @name) @call
+            (call_expression function: (field_expression field: (field_identifier) @name)) @call
         """,
             "imports": """
             (preproc_include path: (string_literal) @name)
@@ -383,7 +389,10 @@ _register(
             "functions": (
                 "(function_declaration name: (identifier) @name (parameters) @params) @func"
             ),
-            "calls": "(call_expression (identifier) @name) @call",
+            "calls": """
+            (call_expression (identifier) @name) @call
+            (call_expression (field_expression (identifier) (identifier) @name)) @call
+        """,
             "imports": "(builtin_function (builtin_identifier) @name)",
         },
         "ignore_names": ["main"],
