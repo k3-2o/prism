@@ -50,7 +50,8 @@ Suitable for single files (~1s), full projects scale with file count.
 | **Size** | Function length, parameter count, import depth |
 | **Complexity** | Cyclomatic & cognitive complexity, boolean complexity, nesting depth |
 | **Architecture** | God class, module instability, cyclic imports |
-| **Risk** | Error handling coverage, function impurity, dead functions |
+| **Risk** | Error handling coverage, function impurity, **dead functions**, **unreachable code** |
+| **Dead Code** | **Unused imports**, **unused classes**, **unused exports (JS/TS)**, **method call detection** |
 | **Design** | Code clones, public/private ratio |
 | **Change** | Functions added/removed/changed (vs git HEAD) |
 

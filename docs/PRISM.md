@@ -342,7 +342,11 @@ cd ~/project && prism .
 | `parameter_count` | tree-sitter | int | >6 | Number of explicit function parameters (excluding self/cls, counting *args/**kwargs as 1 each) |
 | `nesting_depth` | tree-sitter | int | >4 | Max indentation depth (in 4-space units) within a function body |
 | `function_length` | tree-sitter | int | >60 | Lines of code from `def` line to end of function body |
-| `dead_function` | tree-sitter | 0 | null | Function defined but never called within its own file. Dunder methods (`__x__`) are excluded. Method calls (`obj.method()`) are NOT detected as callers — only direct calls (`method()`) are. |
+| `dead_function` | tree-sitter | 0 | null | Function defined but never called within its own file. Dunder methods (`__x__`) excluded. Method calls (`obj.method()`) are now detected alongside direct calls (`method()`). For JS/TS, exported functions with no callers are flagged as `unused_export` instead. |
+| `unreachable_code` | tree-sitter | int | null | Code that follows a terminal statement (return, break, continue, raise, throw). 100% confidence — these statements can never execute. Works across all 12 languages via node type keyword matching. |
+| `unused_import` | tree-sitter | 0 | null | Imported symbol that is never referenced anywhere in the file. Handles `import X`, `from X import Y`, JS/TS `import { X } from 'y'`, and default imports. Module source names are not confused with imported symbols. |
+| `unused_class` | tree-sitter | 0 | null | Class defined but never referenced. Uses calls query + identifier walk, excluding the class's own definition from the reference set. Available for languages with a `classes` query (Python, JS, TS, Java, Ruby, PHP, C++). |
+| `unused_export` | tree-sitter | 0 | null | JS/TS export (function, variable, class) with no in-file calls and no cross-file callers. Exported functions with in-file calls are not flagged. Non-exported uncalled functions are still flagged as `dead_function`. |
 | `cyclic_import` | tree-sitter | cycle_len | >1 | Module is part of a circular import chain. `context.cycle` lists the full cycle. |
 | `module_instability` | tree-sitter | float | >0.8 | Martin's instability metric: Ce/(Ca+Ce). >0.8 means too many outgoing dependencies (fragile). <0.2 with 0 outgoing means possible dead weight. `context.detail` shows Ca and Ce values. Available in project mode only. |
 | `diff_function_added` | tree-sitter + git | 0 | null | Function exists in current file but not in git HEAD. New code that may need review. |
@@ -668,11 +672,21 @@ Agent: "I'm building a CLI tool in Rust"
 
 The `dead_function` metric reports functions that are never called within their own file. A function that has cross-file callers will still appear as "dead" in its own file's measurements, but the caller enrichment context will list those cross-file callers. The model must reconcile the two.
 
-### Method Calls Not Detected As "Calls"
+For JS/TS, the `unused_export` metric complements `dead_function`: an exported function with no in-file calls is flagged as `unused_export` rather than `dead_function`, because exports are API surface that may be consumed cross-file. After enrichment, if an `unused_export` has cross-file callers, it's actually used.
 
-The dead code detection query `(call function: (identifier) @call_name)` only catches direct function calls like `foo()`. Method calls like `obj.foo()` have a different AST structure (`attribute` node under `call`) and are NOT matched. This means `__init__` methods, class methods, and any method called via `self.method()` will appear as dead code if nothing calls them directly.
+Additional dead code metrics — `unreachable_code`, `unused_import`, `unused_class`, and `unused_export` — were added in the v0.2.0 dead-code enhancement, bringing the total dead-code measurement types to 5 (from 1).
 
-**Mitigation:** Methods named `__init__` are excluded from dead function reporting. Other methods may produce false positives.
+### Method Calls Now Detected (Bug Fixed)
+
+Previously, the dead code detection query only caught direct function calls like `foo()`. Method calls like `obj.foo()` have a different AST structure (`attribute` node under `call`) and were NOT matched. This was fixed in v0.2.0:
+
+- **Python:** Added `(call function: (attribute attribute: (identifier) @name))` pattern
+- **Rust:** Added `(call_expression function: (field_expression field: (field_identifier) @name))` pattern
+- **PHP:** Fixed broken direct call query AND added method call pattern
+- **C++:** Added `(field_expression field:)` pattern for `this->method()` and `x.method()`
+- **Zig:** Added positional `field_expression` pattern for `x.bar()`
+- **JS/TS/Go:** Already had method call patterns — no change needed
+- **Java/Ruby:** Method invocation nodes capture the method name regardless of receiver — no fix needed
 
 ### Cyclic Import Detection Is Bounded
 
@@ -707,6 +721,7 @@ Tree-sitter's capabilities are bounded by what can be determined from the AST wi
 | Size | `function_length`, `parameter_count`, `import_depth` |
 | Complexity | `cyclomatic_complexity`, `cognitive_complexity`, `boolean_complexity`, `nesting_depth` |
 | Structure | `god_class`, `dead_function` |
+| Dead Code | `unreachable_code`, `unused_import`, `unused_class`, `unused_export` |
 | Coupling | `cyclic_import`, `module_instability`, `import_depth` |
 | Correctness risk | `error_handling_coverage`, `function_impurity` |
 | Duplication | `code_clone` |
@@ -896,7 +911,7 @@ All three are language-agnostic, driven by `decision_types` and `boolean_operato
 | Category | Count | Metrics |
 |---|---|---|
 | Basic structure | 4 | param count, nesting depth, function length, cyclic imports |
-| Dead code | 1 | dead_function |
+| Dead code | 5 | dead_function, unreachable_code, unused_import, unused_class, unused_export |
 | Complexity | 3 | cyclomatic, cognitive, boolean |
 | Architecture | 2 | god class, module instability |
 | Error handling | 1 | error_handling_coverage |
@@ -906,7 +921,7 @@ All three are language-agnostic, driven by `decision_types` and `boolean_operato
 | Purity | 1 | function_impurity |
 | Diff | 3 | diff_function_added/removed/changed |
 | Semgrep | dynamic | curated + community rules |
-| **Total** | **16+** | tree-sitter only, sub-millisecond after parse |
+| **Total** | **20+** | tree-sitter only, sub-millisecond after parse |
 
 | Capability | What it measures | Why it matters |
 |---|---|---|
