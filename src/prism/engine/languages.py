@@ -134,6 +134,18 @@ _register(
               name: (identifier) @name
               body: (class_body) @body) @class
         """,
+            "exports": """
+            (export_statement
+              (function_declaration name: (identifier) @name))
+            (export_statement
+              (lexical_declaration
+                (variable_declarator name: (identifier) @name)))
+            (export_statement
+              (class_declaration name: (identifier) @name))
+            (export_statement
+              (export_clause
+                (export_specifier name: (identifier) @name)))
+        """,
         },
         "ignore_names": ["constructor"],
     },
@@ -171,6 +183,18 @@ _register(
             (class_declaration
               name: (identifier) @name
               body: (class_body) @body) @class
+        """,
+            "exports": """
+            (export_statement
+              (function_declaration name: (identifier) @name))
+            (export_statement
+              (lexical_declaration
+                (variable_declarator name: (identifier) @name)))
+            (export_statement
+              (class_declaration name: (identifier) @name))
+            (export_statement
+              (export_clause
+                (export_specifier name: (identifier) @name)))
         """,
         },
         "ignore_names": ["constructor"],

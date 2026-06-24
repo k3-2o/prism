@@ -265,7 +265,12 @@ def measure_function_length(
 
 
 def measure_dead_code(tree: Tree, data: bytes, file_path: str, lang: str) -> list[dict[str, Any]]:
-    """Find functions defined but never called within the same file."""
+    """Find functions defined but never called within the same file.
+
+    If the language supports export detection (JS/TS), exported functions
+    with no in-file calls are flagged as 'unused_export' instead of
+    'dead_function' — they're API surface that may be used cross-file.
+    """
     queries = get_queries(lang)
     ignore_names = set(get_ignore_names(lang))
 
@@ -281,21 +286,72 @@ def measure_dead_code(tree: Tree, data: bytes, file_path: str, lang: str) -> lis
         if func_name and func_node:
             defined[func_name] = func_node.start_point[0] + 1
 
+    # Collect exported names (JS/TS)
+    exported: set[str] = set()
+    if "exports" in queries:
+        for node in _get_captures(queries["exports"], tree.root_node).get("name", []):
+            exported.add(_text(data, node))
+
     called: set[str] = set()
     captures = _get_captures(queries["calls"], tree.root_node)
     for node in captures.get("name", []):
         called.add(_text(data, node))
 
+    # Also collect all identifier references for non-function export checking.
+    # Skip export statements — names only in export declarations don't count.
+    all_ids: set[str] = set()
+    _collect_identifiers(tree.root_node, data, all_ids, skip_extra=frozenset({"export_statement"}))
+
     findings: list[dict[str, Any]] = []
+
+    # Check functions
     for name, line in defined.items():
         if name in ignore_names:
             continue
         if name.startswith("__") and name.endswith("__"):
             continue  # Python dunders
         if name not in called:
-            findings.append(
-                _make_measurement("dead_function", name, 0, None, {"file": file_path, "line": line})
-            )
+            # Export-aware: exported + uncalled → unused_export
+            if name in exported:
+                findings.append(
+                    _make_measurement(
+                        "unused_export",
+                        name,
+                        0,
+                        None,
+                        {"file": file_path, "line": line},
+                    )
+                )
+            else:
+                findings.append(
+                    _make_measurement(
+                        "dead_function",
+                        name,
+                        0,
+                        None,
+                        {"file": file_path, "line": line},
+                    )
+                )
+
+    # Check non-function exports (variables, classes)
+    if "exports" in queries:
+        export_lines: dict[str, int] = {}
+        for node in _get_captures(queries["exports"], tree.root_node).get("name", []):
+            export_lines[_text(data, node)] = node.start_point[0] + 1
+        # Names that appear in export declarations themselves shouldn't count as "used"
+        used_outside_exports = all_ids - set(export_lines.keys())
+        for name in sorted(exported):
+            if name not in defined and name not in used_outside_exports:
+                line = export_lines.get(name, 1)
+                findings.append(
+                    _make_measurement(
+                        "unused_export",
+                        name,
+                        0,
+                        None,
+                        {"file": file_path, "line": line},
+                    )
+                )
 
     return findings
 
@@ -1733,13 +1789,17 @@ def _collect_identifiers(
     data: bytes,
     used_names: set[str],
     imported: bool = False,
+    skip_extra: frozenset[str] | None = None,
 ) -> None:
     """Walk the AST collecting identifier text, skipping import nodes.
 
     When imported=True, we're inside an import statement and should skip.
+    skip_extra: additional node types to skip (e.g., export_statement).
     """
-    # Skip entire import subtrees
+    # Skip import and optionally export subtrees
     if node.type in _IMPORT_NODE_TYPES:
+        return
+    if skip_extra and node.type in skip_extra:
         return
 
     # Collect identifiers
@@ -1750,7 +1810,7 @@ def _collect_identifiers(
 
     # Recurse into children
     for child in node.children:
-        _collect_identifiers(child, data, used_names, imported)
+        _collect_identifiers(child, data, used_names, imported, skip_extra)
 
 
 def _remove_module_names(
