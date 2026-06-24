@@ -24,6 +24,7 @@ from prism.engine.languages import (
     get_thresholds,
     supported_extensions,
 )
+from prism.enrich.module_graph import ModuleGraph
 
 # ── Code cache ───────────────────────────────────────────────────────────
 
@@ -2467,6 +2468,33 @@ def run_project(files: list[str]) -> dict[str, Any]:
     findings.extend(measure_module_coupling(files))
     findings.extend(measure_code_clones_project(files))
 
+    # Build module graph for cross-file dead code detection
+    project_import_graph: dict[str, list[str]] = {}
+    try:
+        mg = ModuleGraph()
+        mg.build(files)
+
+        # Set entry points from config + language defaults
+        cfg = load_config()
+        config_entry_points = cfg.get("project", {}).get("entry_points", [])
+        entry_points = list(config_entry_points)
+        for f in files:
+            ext = Path(f).suffix.lower()
+            lang = extension_to_language(ext)
+            if lang:
+                entry_points.extend(get_entry_points(lang))
+        mg.set_entry_points(entry_points)
+        mg.compute_reachability()
+
+        # Add unused file and cross-file dead function findings
+        findings.extend(mg.find_unused_files())
+        findings.extend(mg.find_cross_file_dead_functions())
+
+        # Use module graph's import graph for visualization
+        project_import_graph = mg.get_import_graph()
+    except Exception:
+        project_import_graph = {}
+
     # Compute project-level meta
     nloc_values = [m["value"] for m in findings if m["metric"] == "nloc" and m["value"] is not None]
     cc_values = [
@@ -2498,23 +2526,6 @@ def run_project(files: list[str]) -> dict[str, Any]:
         if lang:
             lang_count[lang] += 1
 
-    # Build import graph for visualization
-    import_graph: dict[str, list[str]] = {}
-    project_files_set = {str(Path(f).resolve()) for f in files}
-    for fpath in files:
-        p = Path(fpath)
-        try:
-            data = p.read_bytes()
-        except Exception:
-            continue
-        ext = p.suffix.lower()
-        lang = extension_to_language(ext) or "python"
-        resolved = _extract_project_imports(data, lang, str(p), project_files_set)
-        src_name = p.stem
-        import_graph[src_name] = sorted(
-            [Path(r).stem for r in resolved if Path(r).stem != src_name]
-        )
-
     meta = {
         "total_files": len(files),
         "total_nloc": total_nloc,
@@ -2522,7 +2533,7 @@ def run_project(files: list[str]) -> dict[str, Any]:
         "avg_cognitive": avg_cog,
         "max_nesting": max_nest,
         "languages": dict(lang_count.most_common()),
-        "import_graph": import_graph,
+        "import_graph": project_import_graph,
     }
 
     return {"measurements": findings, "meta": meta}
