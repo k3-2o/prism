@@ -2560,7 +2560,10 @@ def _walk_var_usage(
 
 def run(file_path: str, project_files: list[str] | None = None) -> list[dict[str, Any]]:
     """Run all structural measurements on a single file."""
-    tree, data, lang = parse_file(file_path)
+    try:
+        tree, data, lang = parse_file(file_path)
+    except (ValueError, Exception):
+        return []
 
     findings: list[dict[str, Any]] = []
     findings.extend(measure_parameter_count(tree, data, file_path, lang))
