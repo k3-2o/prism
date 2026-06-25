@@ -137,6 +137,16 @@ def _condense_finding(m: dict) -> dict:
             )
         finding["callers"] = clean_callers
 
+    # Fix caller contradiction: a function flagged as dead_function (in-file)
+    # that HAS cross-file callers is NOT dead — it's just uncalled in-file.
+    # Downgrade confidence and note the caller count.
+    if finding["metric"] == "dead_function" and callers:
+        finding["confidence"] = 30
+        finding["detail"] = (
+            f"uncalled in own file, but has {len(callers)}"
+            f" cross-file caller{'s' if len(callers) != 1 else ''}"
+        )
+
     if ctx.get("cycle"):
         finding["cycle"] = ctx["cycle"]
 

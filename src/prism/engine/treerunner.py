@@ -2544,14 +2544,20 @@ def _walk_var_usage(
                 idx = siblings.index(node)
             except ValueError:
                 idx = -1
-            # Per-type store index:
             if parent.type == "for_statement":
-                is_store = idx == 1  # after "for" keyword
+                is_store = idx == 1
             else:
-                is_store = idx == 0  # first child for assignment/declarator
+                is_store = idx == 0
         if is_store:
             defined.add(name)
         elif name:
+            seen.add(name)
+
+    # shorthand_property_identifier is a leaf node in JS/TS — its text IS
+    # the variable being read (e.g., return { result } → result is used)
+    if node.type == "shorthand_property_identifier":
+        name = _text(data, node)
+        if name:
             seen.add(name)
 
     for child in node.children:
