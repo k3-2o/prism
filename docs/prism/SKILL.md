@@ -53,16 +53,16 @@ Don't paste raw JSON. Read the `summary.by_metric` and tell the user:
 
 `--fast` skips: churn hotspots (git history), cross-file clones (structural + token), module graph (BFS reachability, unused files, cross-file dead functions), interprocedural purity, import rules. It still gives you: complexity, dead code (in-file), unused imports/variables/classes, unreachable code, error handling, god classes, cyclic imports, module coupling.
 
-### When to use other flags
+### When to use other flags (agent decides, not the user)
 
-**DO NOT use these flags casually.** Only when the situation specifically calls for it:
+The agent should reach for these based on context. The user should NOT need to ask for them:
 
-| Flag | Use ONLY when |
-|---|---|
-| `--filter dead_function,unused_import` | The user asks for a specific metric. Not a default. |
-| `--compact` | The user wants machine-readable output for piping/scripting. |
-| `--visualize` | The user explicitly asks for a dependency graph. |
-| `--entry-points main,handler` | The repo has framework entry points that would be falsely flagged as dead. |
+| Flag | Agent uses it when... | The agent should NOT use it when... |
+|---|---|---|
+| `--filter dead_function,unused_import` | The task is specifically dead code hunting, not a general audit. The agent reads the summary and drills down. | The user just said "analyze this" — give them the full picture first, then drill down. |
+| `--compact` | The agent is piping output to another tool, writing a script, or the user asked for machine-readable. | The agent is going to read the output itself — JSON is easier to navigate. |
+| `--visualize` | The user asked about architecture, dependencies, or "how are these files connected?" | The user just wants metrics — a DOT file isn't helpful. |
+| `--entry-points main,handler` | The repo has a framework (Flask, Next.js, Express) where `main()` isn't the only entry pattern. The agent detects this from the file structure. | It's a library, not an application — everything is an entry point. |
 
 ### Full analysis on huge repos — tmux background
 
