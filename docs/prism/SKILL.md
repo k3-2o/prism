@@ -1,6 +1,6 @@
 ---
 name: prism
-description: "Structural code analysis — measures cyclomatic complexity, cognitive complexity, nesting depth, function length, dead functions (cross-file), unused imports/variables/classes/exports, unreachable code, code clones (structural + token-based), error handling coverage, function purity (interprocedural), god classes, cyclic imports (full path), module instability, churn hotspots, maintainability index, and more across 12 languages. Supports --filter, --compact, --visualize, entry point awareness, confidence levels, import rule enforcement. Use when: reviewing code quality before commit, auditing for structural issues, cross-checking your own analysis, finding dead code, quantifying complexity, or preparing a final review. Trigger words: analyze, audit, review, complexity, dead code, structural analysis, code quality, metrics, prism."
+description: "Structural code analysis — measures cyclomatic complexity, cognitive complexity, nesting depth, function length, dead functions (cross-file), unused imports/variables/classes/exports, unreachable code, code clones (structural + token-based), error handling coverage, function purity (interprocedural), god classes, cyclic imports (full path), module instability, churn hotspots, maintainability index, and more across 12 languages. Supports --filter, --fast, --compact, --visualize, entry point awareness, confidence levels, import rule enforcement. Use when: reviewing code quality before commit, auditing for structural issues, cross-checking your own analysis, finding dead code, quantifying complexity, or preparing a final review. Trigger words: analyze, audit, review, complexity, dead code, structural analysis, code quality, metrics, prism."
 compatibility: "Requires `prism` CLI on PATH. Install from github.com/k3-2o/prism."
 ---
 
@@ -19,7 +19,48 @@ git clone https://github.com/k3-2o/prism ~/prism && cd ~/prism && uv tool instal
 
 ---
 
-## How to Use (Action Guide)
+## How to Use (Decision Guide)
+
+**⚠️ PRISM is not instant on large repos.** Always start by sizing the repo first.
+
+### Step 0: Size the repo
+
+```bash
+# Count supported source files
+find . -type f \( -name "*.py" -o -name "*.ts" -o -name "*.tsx" -o -name "*.js" -o -name "*.jsx" -o -name "*.go" -o -name "*.rs" -o -name "*.java" -o -name "*.rb" -o -name "*.php" -o -name "*.c" -o -name "*.cpp" -o -name "*.zig" \) | wc -l
+```
+
+### Step 1: Pick the right command
+
+| File count | Command | Time | What you get |
+|---|---|---|---|
+| **1 file** | `prism path/to/file.py` | ~1s | All metrics for that file |
+| **<50 files** | `prism .` | ~10-15s | Full analysis: all 25+ metrics, churn, clones, module graph |
+| **50–500 files** | `prism . --fast` | ~5-10s | Core metrics only: complexity, dead code, error handling, coupling (no churn, no clones, no module graph) |
+| **500+ files** | `prism . --fast` then offer full run | ~10-30s (fast) / minutes (full) | Start with fast. If the user wants churn/clones/graph, offer to run full analysis in a tmux background pane. |
+
+### When to use --fast
+
+`--fast` skips: churn hotspots (git history), cross-file clones (structural + token), module graph (BFS reachability, unused files, cross-file dead functions), interprocedural purity, import rules. Use it for large repos or quick iteration. It still gives you: complexity, dead code (in-file), unused imports/variables/classes, unreachable code, error handling, god classes, cyclic imports, module coupling.
+
+### When to use other flags
+
+| Flag | Use ONLY when |
+|---|---|
+| `--filter dead_function,unused_import` | User asks for a specific metric category. NOT a casual default. |
+| `--compact` | User wants machine-readable output for piping/scripts. |
+| `--visualize` | User explicitly asks for a dependency graph. |
+| `--entry-points main` | The repo has framework entry points that look dead but aren't. |
+
+### Full analysis on large repos — tmux background
+
+If the user has 500+ files and wants the full analysis (churn, clones, module graph), offer:
+
+```bash
+# Create a named tmux session and run in it
+tmux new-session -d -s prism-audit 'cd /path/to/repo && prism . --filter dead_function,unused_import > prism-full.json 2>&1 && echo DONE'
+# Tell the user to check with: tmux attach -t prism-audit
+```
 
 ### Single file — after an edit
 
@@ -28,48 +69,11 @@ prism path/to/file.py
 # ~1s, returns JSON grouped by file
 ```
 
-### Full project — every 3-5 iterations
-
-```bash
-prism .
-# ~13s for a 14-file project, scales with import graph depth, not file count
-```
-
-### Focused — only what you care about
-
-```bash
-prism . --filter dead_function,unused_import,unreachable_code
-# Drops output from 454 findings to 87. Multiple metrics, comma-separated.
-```
-
-### Machine-readable — for scripts / CI
-
-```bash
-prism . --compact
-# One line per finding: file: f=func m=metric l=line c=confidence v=value d=detail
-```
-
-### Fast mode — skip expensive ops for large projects
-
-```bash
-prism . --fast
-# Skips: churn hotspots, cross-file clones, module graph, interprocedural purity
-```
-
 ### Dependency graph
 
 ```bash
 prism . --visualize                      # Produces PROJECT-deps.dot
 prism . --visualize --visualize-format svg  # Renders to SVG (requires graphviz)
-```
-
-### Entry points — mark functions as always-alive
-
-```bash
-prism . --entry-points main --entry-points handler
-# Or configure in .prism.toml:
-# [project]
-# entry_points = ["main", "handler"]
 ```
 
 ---
