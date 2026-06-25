@@ -77,10 +77,9 @@ def find_cross_file_callers(
             try:
                 parser = get_parser(lang)
                 queries = get_queries(lang)
-            except ValueError:
+                tree = parser.parse(data)
+            except (ValueError, Exception):
                 continue
-
-            tree = parser.parse(data)
             query = queries["calls"]
             cache[fpath] = (tree, data, lang, query)
 
