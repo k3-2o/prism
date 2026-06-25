@@ -159,10 +159,11 @@ def _build_output(
     config: dict | None = None,
     visualize: bool = False,
     visualize_format: str = "dot",
+    fast: bool = False,
 ) -> dict:
     p = Path(path)
     if p.is_dir():
-        return _build_project_wrapper(str(p.resolve()), config, visualize, visualize_format)
+        return _build_project_wrapper(str(p.resolve()), config, visualize, visualize_format, fast)
 
     measurements = treerunner_run(path)
     project_files = discover_project_files(str(p.parent))
@@ -176,6 +177,7 @@ def _build_project_wrapper(
     config: dict | None = None,
     visualize: bool = False,
     visualize_format: str = "dot",
+    fast: bool = False,
 ) -> dict:
     files = discover_project_files(root)
     if not files:
@@ -191,7 +193,7 @@ def _build_project_wrapper(
             "files": {},
         }
 
-    result = treerunner_run_project(files)
+    result = treerunner_run_project(files, fast=fast)
     all_measurements = result["measurements"]
     project_meta = result["meta"]
 
@@ -332,6 +334,12 @@ def _detect_language(path: str) -> str:
     default=False,
     help="Compact output: one line per finding for machine consumption.",
 )
+@click.option(
+    "--fast",
+    is_flag=True,
+    default=False,
+    help="Skip expensive operations: churn, clones, module graph, interprocedural purity.",
+)
 @click.version_option(__version__)
 def cli(
     path: str,
@@ -341,6 +349,7 @@ def cli(
     visualize_format: str = "dot",
     metric_filter: str | None = None,
     compact: bool = False,
+    fast: bool = False,
 ) -> None:
     """Analyze PATH and return JSON structural measurements.
 
@@ -361,7 +370,9 @@ def cli(
         if entry_points:
             config.setdefault("project", {})["entry_points"] = list(entry_points)
 
-        output = _build_output(path, config, visualize=visualize, visualize_format=visualize_format)
+        output = _build_output(
+            path, config, visualize=visualize, visualize_format=visualize_format, fast=fast
+        )
         output["prism"]["entry_points"] = config.get("project", {}).get("entry_points", [])
 
         # Apply metric filter

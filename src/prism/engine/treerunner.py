@@ -2558,8 +2558,13 @@ def _walk_var_usage(
         _walk_var_usage(child, data, defined, seen)
 
 
-def run(file_path: str, project_files: list[str] | None = None) -> list[dict[str, Any]]:
-    """Run all structural measurements on a single file."""
+def run(
+    file_path: str, project_files: list[str] | None = None, fast: bool = False
+) -> list[dict[str, Any]]:
+    """Run all structural measurements on a single file.
+
+    If fast=True, skip expensive git operations (churn, structural diff).
+    """
     try:
         tree, data, lang = parse_file(file_path)
     except (ValueError, Exception):
@@ -2585,8 +2590,10 @@ def run(file_path: str, project_files: list[str] | None = None) -> list[dict[str
     findings.extend(measure_unused_imports(tree, data, file_path, lang))
     findings.extend(measure_unused_classes(tree, data, file_path, lang))
     findings.extend(measure_unused_variables(tree, data, file_path, lang))
-    findings.extend(structural_diff(file_path))
-    findings.extend(measure_churn_hotspots(file_path))
+
+    if not fast:
+        findings.extend(structural_diff(file_path))
+        findings.extend(measure_churn_hotspots(file_path))
 
     return findings
 
@@ -2656,63 +2663,63 @@ def _propagate_impurity(
     return new_findings
 
 
-def run_project(files: list[str]) -> dict[str, Any]:
-    """Run structural measurements across a project, including cyclic imports and coupling.
+def run_project(files: list[str], fast: bool = False) -> dict[str, Any]:
+    """Run structural measurements across a project.
 
-    Returns {"measurements": [...], "meta": {...}} where meta contains project-level
-    aggregation (total files, NLOC, avg complexity, language breakdown).
+    If fast=True, skip expensive operations: churn hotspots, code clones
+    (cross-file), module graph, interprocedural purity, import rules.
     """
     findings: list[dict[str, Any]] = []
     for f in files:
         try:
-            findings.extend(run(f))
+            findings.extend(run(f, fast=fast))
         except (ValueError, Exception):
-            continue  # Skip unsupported files
+            continue
     findings.extend(measure_cyclic_imports(files, ""))
     findings.extend(measure_module_coupling(files))
-    findings.extend(measure_code_clones_project(files))
-    findings.extend(measure_code_clones_token(files))
 
-    # Build module graph for cross-file dead code detection
     project_import_graph: dict[str, list[str]] = {}
-    try:
-        mg = ModuleGraph()
-        mg.build(files)
 
-        # Set entry points from config + language defaults
-        cfg = load_config()
-        config_entry_points = cfg.get("project", {}).get("entry_points", [])
-        entry_points = list(config_entry_points)
-        for f in files:
-            ext = Path(f).suffix.lower()
-            lang = extension_to_language(ext)
-            if lang:
-                entry_points.extend(get_entry_points(lang))
-        mg.set_entry_points(entry_points)
-        mg.compute_reachability()
+    if not fast:
+        findings.extend(measure_code_clones_project(files))
+        findings.extend(measure_code_clones_token(files))
 
-        # Add unused file and cross-file dead function findings
-        findings.extend(mg.find_unused_files())
-        findings.extend(mg.find_cross_file_dead_functions())
-
-        # Interprocedural purity propagation
+        # Build module graph for cross-file dead code detection
         try:
-            findings.extend(_propagate_impurity(findings, mg))
+            mg = ModuleGraph()
+            mg.build(files)
+
+            cfg = load_config()
+            config_entry_points = cfg.get("project", {}).get("entry_points", [])
+            entry_points = list(config_entry_points)
+            for f in files:
+                ext = Path(f).suffix.lower()
+                lang = extension_to_language(ext)
+                if lang:
+                    entry_points.extend(get_entry_points(lang))
+            mg.set_entry_points(entry_points)
+            mg.compute_reachability()
+
+            findings.extend(mg.find_unused_files())
+            findings.extend(mg.find_cross_file_dead_functions())
+
+            try:
+                findings.extend(_propagate_impurity(findings, mg))
+            except Exception:
+                pass
+
+            project_import_graph = mg.get_import_graph()
+
+            try:
+                from prism.enrich.import_rules import check_import_rules
+
+                findings.extend(
+                    check_import_rules(files, {"import_graph": project_import_graph}, cfg)
+                )
+            except Exception:
+                pass
         except Exception:
-            pass
-
-        # Use module graph's import graph for visualization
-        project_import_graph = mg.get_import_graph()
-
-        # Import rule enforcement
-        try:
-            from prism.enrich.import_rules import check_import_rules
-
-            findings.extend(check_import_rules(files, {"import_graph": project_import_graph}, cfg))
-        except Exception:
-            pass
-    except Exception:
-        project_import_graph = {}
+            project_import_graph = {}
 
     # Compute project-level meta
     nloc_values = [m["value"] for m in findings if m["metric"] == "nloc" and m["value"] is not None]
