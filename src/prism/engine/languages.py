@@ -451,7 +451,7 @@ _register(
         """,
             "classes": """
             (class_declaration
-              name: (identifier) @name
+              name: (type_identifier) @name
               body: (class_body) @body) @class
         """,
             "exports": """
