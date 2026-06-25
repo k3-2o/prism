@@ -461,7 +461,7 @@ _register(
               (lexical_declaration
                 (variable_declarator name: (identifier) @name)))
             (export_statement
-              (class_declaration name: (identifier) @name))
+              (class_declaration name: (type_identifier) @name))
             (export_statement
               (export_clause
                 (export_specifier name: (identifier) @name)))
