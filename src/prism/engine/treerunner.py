@@ -397,9 +397,9 @@ def _extract_project_imports(
     """Extract local module names imported by this file, resolved to actual file paths."""
     try:
         parser = get_parser(lang)
-    except ValueError:
+        tree = parser.parse(data)
+    except (ValueError, Exception):
         return set()
-    tree = parser.parse(data)
     queries = get_queries(lang)
     resolved: set[str] = set()
     project_root = str(_find_project_root(file_path))
