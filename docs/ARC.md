@@ -120,6 +120,7 @@ prism PATH [OPTIONS]
 | `--entry-points NAME` | Mark function as entry point (repeatable) |
 | `--filter metric1,metric2` | Only show specific metric types |
 | `--compact` | One line per finding, machine-readable |
+| `--fast` | Skip churn, clones, module graph |
 | `--visualize` | Generate dependency graph DOT file |
 | `--visualize-format dot\|svg\|png` | Graph output format (requires graphviz) |
 
@@ -166,6 +167,7 @@ Structured JSON grouped by file:
 ```
 
 Compact mode (`--compact`):
+| `--fast` | Skip churn, clones, module graph |
 ```
 src/prism/config.py: f=get_entry_points m=dead_function l=103 c=70 v=0
 ```
