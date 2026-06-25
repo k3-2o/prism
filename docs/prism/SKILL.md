@@ -21,60 +21,58 @@ git clone https://github.com/k3-2o/prism ~/prism && cd ~/prism && uv tool instal
 
 ## How to Use (Decision Guide)
 
-**⚠️ PRISM is not instant on large repos.** Always start by sizing the repo first.
+**⚠️ PRISM is not instant on large repos. The agent MUST size the repo first.**
 
-### Step 0: Size the repo
+### Step 0 — Size the repo
 
 ```bash
-# Count supported source files
 find . -type f \( -name "*.py" -o -name "*.ts" -o -name "*.tsx" -o -name "*.js" -o -name "*.jsx" -o -name "*.go" -o -name "*.rs" -o -name "*.java" -o -name "*.rb" -o -name "*.php" -o -name "*.c" -o -name "*.cpp" -o -name "*.zig" \) | wc -l
 ```
 
-### Step 1: Pick the right command
+### Step 1 — Decide and communicate
 
-| File count | Command | Time | What you get |
+Based on the file count, pick the command AND tell the user why:
+
+| Files | Command | Time | What to tell the user |
 |---|---|---|---|
-| **1 file** | `prism path/to/file.py` | ~1s | All metrics for that file |
-| **<50 files** | `prism .` | ~10-15s | Full analysis: all 25+ metrics, churn, clones, module graph |
-| **50–500 files** | `prism . --fast` | ~5-10s | Core metrics only: complexity, dead code, error handling, coupling (no churn, no clones, no module graph) |
-| **500+ files** | `prism . --fast` then offer full run | ~10-30s (fast) / minutes (full) | Start with fast. If the user wants churn/clones/graph, offer to run full analysis in a tmux background pane. |
+| **1** | `prism path/to/file.py` | ~1s | "Running PRISM on this file — one second." |
+| **2–49** | `prism .` | ~10-20s | "Running full analysis on <N> files — about 15 seconds." |
+| **50–500** | `prism . --fast` | ~5-15s | "<N> files — running fast mode (skips churn/clones/module graph). If you want the full analysis with churn hotspots and dependency graphs, say so and I'll run it in a tmux background pane." |
+| **500+** | `prism . --fast` + offer tmux | ~15-60s (fast) | "Repo is huge (<N> files). Running fast mode now. Full analysis (churn, clones, module graph) would take minutes — want me to queue it in a tmux background pane?" |
+
+**Never run `prism .` without --fast on a 500+ file repo without warning the user first.**
+
+### Step 2 — After running, summarize don't dump
+
+Don't paste raw JSON. Read the `summary.by_metric` and tell the user:
+- How many findings total
+- Top categories (e.g., "89 dead functions, 47 unused imports, 12 unreachable code errors")
+- The most interesting finding (e.g., "`handle_request` in `server.py` is dead code — no callers anywhere")
 
 ### When to use --fast
 
-`--fast` skips: churn hotspots (git history), cross-file clones (structural + token), module graph (BFS reachability, unused files, cross-file dead functions), interprocedural purity, import rules. Use it for large repos or quick iteration. It still gives you: complexity, dead code (in-file), unused imports/variables/classes, unreachable code, error handling, god classes, cyclic imports, module coupling.
+`--fast` skips: churn hotspots (git history), cross-file clones (structural + token), module graph (BFS reachability, unused files, cross-file dead functions), interprocedural purity, import rules. It still gives you: complexity, dead code (in-file), unused imports/variables/classes, unreachable code, error handling, god classes, cyclic imports, module coupling.
 
 ### When to use other flags
 
+**DO NOT use these flags casually.** Only when the situation specifically calls for it:
+
 | Flag | Use ONLY when |
 |---|---|
-| `--filter dead_function,unused_import` | User asks for a specific metric category. NOT a casual default. |
-| `--compact` | User wants machine-readable output for piping/scripts. |
-| `--visualize` | User explicitly asks for a dependency graph. |
-| `--entry-points main` | The repo has framework entry points that look dead but aren't. |
+| `--filter dead_function,unused_import` | The user asks for a specific metric. Not a default. |
+| `--compact` | The user wants machine-readable output for piping/scripting. |
+| `--visualize` | The user explicitly asks for a dependency graph. |
+| `--entry-points main,handler` | The repo has framework entry points that would be falsely flagged as dead. |
 
-### Full analysis on large repos — tmux background
+### Full analysis on huge repos — tmux background
 
-If the user has 500+ files and wants the full analysis (churn, clones, module graph), offer:
-
-```bash
-# Create a named tmux session and run in it
-tmux new-session -d -s prism-audit 'cd /path/to/repo && prism . --filter dead_function,unused_import > prism-full.json 2>&1 && echo DONE'
-# Tell the user to check with: tmux attach -t prism-audit
-```
-
-### Single file — after an edit
+If the user has 500+ files and wants full analysis, offer this exact command:
 
 ```bash
-prism path/to/file.py
-# ~1s, returns JSON grouped by file
+tmux new-session -d -s prism-audit 'cd /path/to/repo && prism . > prism-full.json 2>&1 && echo "DONE — results in prism-full.json"'
 ```
 
-### Dependency graph
-
-```bash
-prism . --visualize                      # Produces PROJECT-deps.dot
-prism . --visualize --visualize-format svg  # Renders to SVG (requires graphviz)
-```
+Tell the user: "It's running in tmux session 'prism-audit'. Check progress with `tmux attach -t prism-audit`. Results go to `prism-full.json`."
 
 ---
 
