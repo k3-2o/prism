@@ -53,16 +53,16 @@ Don't paste raw JSON. Read the `summary.by_metric` and tell the user:
 
 `--fast` skips: churn hotspots (git history), cross-file clones (structural + token), module graph (BFS reachability, unused files, cross-file dead functions), interprocedural purity, import rules. It still gives you: complexity, dead code (in-file), unused imports/variables/classes, unreachable code, error handling, god classes, cyclic imports, module coupling.
 
-### When to use other flags (agent decides, not the user)
+### When to use other flags
 
-The agent should reach for these based on context. The user should NOT need to ask for them:
+**DO NOT use these casually. They exist for specific situations only.**
 
-| Flag | Agent uses it when... | The agent should NOT use it when... |
+| Flag | Use when | DO NOT use when |
 |---|---|---|
-| `--filter dead_function,unused_import` | The task is specifically dead code hunting, not a general audit. The agent reads the summary and drills down. | The user just said "analyze this" — give them the full picture first, then drill down. |
-| `--compact` | The agent is piping output to another tool, writing a script, or the user asked for machine-readable. | The agent is going to read the output itself — JSON is easier to navigate. |
-| `--visualize` | The user asked about architecture, dependencies, or "how are these files connected?" | The user just wants metrics — a DOT file isn't helpful. |
-| `--entry-points main,handler` | The repo has a framework (Flask, Next.js, Express) where `main()` isn't the only entry pattern. The agent detects this from the file structure. | It's a library, not an application — everything is an entry point. |
+| `--filter dead_function,unused_import` | I am hunting dead code specifically. I ran the full audit first, saw the summary, and now I'm drilling into one category. | I'm running the first pass. Give the full picture first. |
+| `--compact` | I am piping output into another tool, writing a script, or doing CI. | I am going to read the output myself. JSON is easier to navigate. |
+| `--visualize` | I am discussing architecture, dependencies, or "how are these files connected?" | I am doing metrics or dead code. A DOT file adds nothing. |
+| `--entry-points main,handler` | The project is a framework app (Flask, Next.js, Express) and I see files like `app.py`, `routes.py`, `pages/` that would be flagged as dead. | The project is a library or CLI tool where every public function is an intentional export. |
 
 ### Full analysis on huge repos — tmux background
 
