@@ -167,10 +167,11 @@ Structured JSON grouped by file:
 ```
 
 Compact mode (`--compact`):
-| `--fast` | Skip churn, clones, module graph |
 ```
 src/prism/config.py: f=get_entry_points m=dead_function l=103 c=70 v=0
 ```
+
+Fast mode (`--fast`): skips churn hotspots, cross-file clones, module graph, interprocedural purity.
 
 ---
 

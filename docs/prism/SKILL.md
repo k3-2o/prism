@@ -1,7 +1,6 @@
 ---
 name: prism
 description: "Structural code analysis — measures cyclomatic complexity, cognitive complexity, nesting depth, function length, dead functions (cross-file), unused imports/variables/classes/exports, unreachable code, code clones (structural + token-based), error handling coverage, function purity (interprocedural), god classes, cyclic imports (full path), module instability, churn hotspots, maintainability index, and more across 12 languages. Supports --filter, --compact, --visualize, entry point awareness, confidence levels, import rule enforcement. Use when: reviewing code quality before commit, auditing for structural issues, cross-checking your own analysis, finding dead code, quantifying complexity, or preparing a final review. Trigger words: analyze, audit, review, complexity, dead code, structural analysis, code quality, metrics, prism."
-| `--fast` | Skip expensive ops: churn, clones, module graph |
 compatibility: "Requires `prism` CLI on PATH. Install from github.com/k3-2o/prism."
 ---
 
@@ -47,9 +46,14 @@ prism . --filter dead_function,unused_import,unreachable_code
 
 ```bash
 prism . --compact
-prism . --fast               # skip expensive ops for large projects
-| `--fast` | Skip expensive ops: churn, clones, module graph |
 # One line per finding: file: f=func m=metric l=line c=confidence v=value d=detail
+```
+
+### Fast mode — skip expensive ops for large projects
+
+```bash
+prism . --fast
+# Skips: churn hotspots, cross-file clones, module graph, interprocedural purity
 ```
 
 ### Dependency graph
